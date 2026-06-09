@@ -6,6 +6,8 @@ import MLXNN
 
 /// Container for models that guarantees single threaded access.
 ///
+/// * Important: `ModelContext` is now `Sendable` that can be used directly.
+///
 /// Wrap models used by e.g. the UI in a ModelContainer. Callers can access
 /// the model and/or tokenizer (any values from the ``ModelContext``):
 ///
@@ -29,29 +31,36 @@ import MLXNN
 ///     }
 /// }
 /// ```
-public final class ModelContainer: Sendable {
-    private let context: SerialAccessContainer<ModelContext>
+@available(*, deprecated, message: "use ModelContext instead")
+public final class ModelContainer: @unchecked (Sendable) {
 
-    public var configuration: ModelConfiguration {
-        get async {
-            await context.read { $0.configuration }
+    private var _context: ModelContext
+    private let lock = NSLock()
+    private var context: ModelContext {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return _context
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            _context = newValue
         }
     }
 
-    public var processor: UserInputProcessor {
-        get async {
-            await context.read { $0.processor }
-        }
-    }
+    public var modelContext: ModelContext { context }
 
-    public var tokenizer: Tokenizer {
-        get async {
-            await context.read { $0.tokenizer }
-        }
-    }
+    public var configuration: ModelConfiguration { context.configuration }
 
-    public init(context: consuming ModelContext) {
-        self.context = .init(context)
+    public var model: any LanguageModel & Sendable { context.model }
+
+    public var processor: UserInputProcessor { context.processor }
+
+    public var tokenizer: Tokenizer { context.tokenizer }
+
+    public init(context: ModelContext) {
+        self._context = context
     }
 
     /// Perform an action on the model and/or tokenizer. Callers _must_ eval any `MLXArray` before returning as
@@ -59,25 +68,16 @@ public final class ModelContainer: Sendable {
     @available(*, deprecated, message: "prefer perform(_:) that uses a ModelContext")
     public func perform<R: Sendable>(
         _ action: @Sendable (any LanguageModel, Tokenizer) throws -> sending R
-    )
-        async rethrows
-        -> sending R
-    {
-        try await context.read {
-            try action($0.model, $0.tokenizer)
-        }
+    ) rethrows -> sending R {
+        try action(context.model, context.tokenizer)
     }
 
     /// Perform an action on the model and/or tokenizer with additional context values.
-    /// Callers _must_ eval any `MLXArray` before returning as
-    /// `MLXArray` is not `Sendable`.
     @available(*, deprecated, message: "prefer perform(values:_:) that uses a ModelContext")
     public func perform<V: Sendable, R: Sendable>(
         values: V, _ action: @Sendable (any LanguageModel, Tokenizer, V) throws -> sending R
-    ) async rethrows -> sending R {
-        try await context.read {
-            try action($0.model, $0.tokenizer, values)
-        }
+    ) rethrows -> sending R {
+        try action(context.model, context.tokenizer, values)
     }
 
     /// Perform an action on the ``ModelContext``. Callers _must_ eval any `MLXArray` before returning as
@@ -90,9 +90,7 @@ public final class ModelContainer: Sendable {
     public func perform<R: Sendable>(
         _ action: @Sendable (ModelContext) async throws -> sending R
     ) async rethrows -> sending R {
-        try await context.read {
-            try await action($0)
-        }
+        try await action(context)
     }
 
     /// Perform an action on the ``ModelContext`` with additional context values.
@@ -101,9 +99,7 @@ public final class ModelContainer: Sendable {
     public func perform<V: Sendable, R: Sendable>(
         values: V, _ action: @Sendable (ModelContext, V) async throws -> R
     ) async rethrows -> sending R {
-        try await context.read {
-            try await action($0, values)
-        }
+        try await action(context, values)
     }
 
     /// Perform an action on the ``ModelContext`` with additional (non `Sendable`) context values.
@@ -112,17 +108,17 @@ public final class ModelContainer: Sendable {
     public func perform<V, R: Sendable>(
         nonSendable values: consuming V, _ action: @Sendable (ModelContext, V) async throws -> R
     ) async rethrows -> sending R {
-        let values = SendableBox(values)
-        return try await context.read {
-            try await action($0, values.consume())
-        }
+        try await action(context, values)
     }
 
     /// Update the owned `ModelContext`.
     /// - Parameter action: update action
+    @available(
+        *, deprecated, message: "ModelContext is now Sendable -- hold that and mutate as needed"
+    )
     public func update(_ action: @Sendable (inout ModelContext) -> Void) async {
-        await context.update {
-            action(&$0)
+        lock.withLock {
+            action(&_context)
         }
     }
 
@@ -130,16 +126,12 @@ public final class ModelContainer: Sendable {
 
     /// The resolved local model directory for the loaded container.
     public var modelDirectory: URL {
-        get async throws {
-            try (await configuration).modelDirectory
-        }
+        get throws { try context.configuration.modelDirectory }
     }
 
     /// The resolved local tokenizer directory for the loaded container.
     public var tokenizerDirectory: URL {
-        get async throws {
-            try (await configuration).tokenizerDirectory
-        }
+        get throws { try context.configuration.tokenizerDirectory }
     }
 
     /// Prepare user input for generation.
@@ -152,7 +144,7 @@ public final class ModelContainer: Sendable {
     /// - Note: The `sending` keyword indicates the return value is transferred (not shared),
     ///   allowing non-Sendable types like `LMInput` to safely cross isolation boundaries.
     public func prepare(input: consuming sending UserInput) async throws -> sending LMInput {
-        let processor = await self.processor
+        let processor = self.processor
         return try await processor.prepare(input: input)
     }
 
@@ -186,45 +178,34 @@ public final class ModelContainer: Sendable {
         parameters: GenerateParameters,
         wiredMemoryTicket: WiredMemoryTicket? = nil
     ) async throws -> AsyncStream<Generation> {
-        let input = SendableBox(input)
-
-        // Note: this is only visiting the model exclusively
-        // for the pre-fill time.  Beyond that there is no
-        // shared mutable state.
-        //
-        // This means that there may be concurrent access to the
-        // model weights themselves (but they are already evaluated).
-
-        return try await context.read { context in
-            try MLXLMCommon.generate(
-                input: input.consume(),
-                parameters: parameters,
-                context: context,
-                wiredMemoryTicket: wiredMemoryTicket
-            )
-        }
+        try MLXLMCommon.generate(
+            input: input,
+            parameters: parameters,
+            context: context,
+            wiredMemoryTicket: wiredMemoryTicket
+        )
     }
 
     /// Decode token IDs to a string.
     ///
     /// - Parameter tokenIds: Array of token IDs
     /// - Returns: Decoded string
-    public func decode(tokenIds: [Int]) async -> String {
-        let tokenizer = await self.tokenizer
+    public func decode(tokenIds: [Int]) -> String {
+        let tokenizer = self.tokenizer
         return tokenizer.decode(tokenIds: tokenIds)
     }
 
     @available(*, deprecated, renamed: "decode(tokenIds:)")
-    public func decode(tokens: [Int]) async -> String {
-        await decode(tokenIds: tokens)
+    public func decode(tokens: [Int]) -> String {
+        decode(tokenIds: tokens)
     }
 
     /// Encode a string to token IDs.
     ///
     /// - Parameter text: Text to encode
     /// - Returns: Array of token IDs
-    public func encode(_ text: String) async -> [Int] {
-        let tokenizer = await self.tokenizer
+    public func encode(_ text: String) -> [Int] {
+        let tokenizer = self.tokenizer
         return tokenizer.encode(text: text)
     }
 
@@ -233,8 +214,11 @@ public final class ModelContainer: Sendable {
     /// - Parameter messages: Array of message dictionaries with "role" and "content" keys
     /// - Returns: Array of token IDs
     @available(*, deprecated, message: "Use applyChatTemplate directly on tokenizer")
-    public func applyChatTemplate(messages: [[String: String]]) async throws -> [Int] {
-        let tokenizer = await self.tokenizer
+    public func applyChatTemplate(messages: [[String: String]]) throws -> [Int] {
+        let tokenizer = self.tokenizer
         return try tokenizer.applyChatTemplate(messages: messages)
     }
 }
+
+/// For internal implementation we declare a non-deprecated typealias that can be used e.g. for type parameters
+public typealias ModelContainerConstraint = ModelContainer
