@@ -31,6 +31,57 @@ import MLXNN
 ///     }
 /// }
 /// ```
+///
+/// ## Mutable Models
+///
+/// In earlier versions, `ModelContainer` stored a plain `Module`.  If you had reference to it,
+/// you could mutate it.  The ``update(_:)`` method was meant for this purpose, though in
+/// practice that was only used to mutate the `ModelConfiguration`.
+///
+/// The `ModelContext` stored in the container is no longer a plain `Module` -- in order to
+/// be `Sendable`, it is also immutable.  The `update()` path cannot mutate it (though it could
+/// replace it).  The ``perform(_:)-((ModelContext)->R)`` calls also can't mutate
+/// the model.  For example, in the LoRA example code:
+///
+/// ```swift
+/// modelAdapter = try await modelContainer.perform { context in
+///     return try LoRAContainer.from(
+///         model: context.model, configuration: LoRAConfiguration(numLayers: loraLayers))
+/// }
+/// ```
+///
+/// That mutates the `context.model` as a side effect (since the `Module` is a reference type
+/// there was nothing to prevent it).
+///
+/// This code will no longer compile and has to be done this way:
+///
+/// ```swift
+/// // load a mutable language model
+/// let modelContext = try await args.loadTrainable(
+///     defaultModel: defaultModel, modelFactory: modelFactory)
+///
+/// // augment the model with LoRA adaptors
+/// modelAdapter = try! LoRAContainer.from(
+///     model: modelContext.model, configuration: LoRAConfiguration(numLayers: loraLayers))
+/// ```
+///
+/// ## Implementation Note
+///
+/// Previously the `ModelContainer` held the `ModelContext` in a `SerialAccessContainer` -- an internal type
+/// that provided a lock-like exclusive access for ``perform(_:)-((ModelContext)->R)`` and ``update(_:)``.
+/// The `ModelContext` was not `Sendable` and this provided the `@unchecked Sendable` protection needed.
+/// In practice, some code like `ChatSession` would use ``perform(_:)-((ModelContext)->R)`` to
+/// _borrow_ the model.  The code was carefully constructed to allow thread-safe access to the shared model
+/// state (the weights) so that multiple sessions could be run concurrently.  This wouldn't have been safe if
+/// another thread was doing LoRA style mutations, of course.
+///
+/// The new code uses an `NSLock` to guard access to the `ModelContext`.  The context is now `Sendable`
+/// and the model itself is immutable.  This now allows concurrent _use_ of the context -- all reads of the struct
+/// itself are done under the lock.  Callers to ``update(_:)`` can modify the context (to a lesser extent than before)
+/// and this is done with the lock held.
+///
+/// Ideally, all use cases will move to use `ModelContext` directly, but in the meantime be aware of this
+/// change in implementation.
 @available(*, deprecated, message: "use ModelContext instead")
 public final class ModelContainer: @unchecked (Sendable) {
 

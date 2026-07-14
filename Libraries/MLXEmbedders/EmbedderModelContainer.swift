@@ -28,6 +28,23 @@ import MLXLMCommon
 ///     return result.map { $0.asArray(Float.self) }
 /// }
 /// ```
+///
+/// ## Implementation Note
+///
+/// Previously the `ModelContainer` held the `EmbedderModelContext` in a `SerialAccessContainer` -- an internal type
+/// that provided a lock-like exclusive access for ``perform(_:)-((ModelContext)->R)`` and ``update(_:)``.
+/// The `EmbedderModelContext` was not `Sendable` and this provided the `@unchecked Sendable` protection needed.
+/// In practice, some code would use ``perform(_:)-((ModelContext)->R)`` to
+/// _borrow_ the model.  This wouldn't have been safe if
+/// another thread was mutating through the reference, of course.
+///
+/// The new code uses an `NSLock` to guard access to the `EmbedderModelContext`.  The context is now `Sendable`
+/// and the model itself is immutable.  This now allows concurrent _use_ of the context -- all reads of the struct
+/// itself are done under the lock.  Callers to ``update(_:)`` can modify the context (to a lesser extent than before)
+/// and this is done with the lock held.
+///
+/// Ideally, all use cases will move to use `EmbedderModelContext` directly, but in the meantime be aware of this
+/// change in implementation.
 @available(*, deprecated, message: "use EmbedderModelContext instead")
 public final class EmbedderModelContainer: @unchecked (Sendable) {
     private var _context: EmbedderModelContext
