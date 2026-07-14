@@ -335,10 +335,10 @@ extension MaterializedModule: BaseLanguageModel where LayerType: BaseLanguageMod
 
 extension MaterializedModule: LanguageModel where LayerType: LanguageModel {
 
-    public func prepare(_ input: LMInput, cache: [KVCache], windowSize: Int?) throws
-        -> PrepareResult
-    {
-        try _base.prepare(input, cache: cache, windowSize: windowSize)
+    public func prepare(
+        _ input: LMInput, cache: [any KVCache], state: LMOutput.State?, windowSize: Int?
+    ) throws -> PrepareResult {
+        try _base.prepare(input, cache: cache, state: state, windowSize: windowSize)
     }
 
     public func callAsFunction(_ input: LMInput.Text, cache: [KVCache]?, state: LMOutput.State?)
