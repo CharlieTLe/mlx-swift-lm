@@ -21,25 +21,40 @@ jobs:
       - name: Select Xcode
         shell: bash
         run: |
-          # The FoundationModels integration tests only build against the macOS 27
-          # SDK (canImport(FoundationModels, _version: 2)); on the macOS 26 SDK the
-          # MLXFoundationModels adapter compiles out and those tests are skipped.
-          # Prefer Xcode 27 when the runner has it so the full suite runs; otherwise
-          # fall back to the default toolchain and run the SDK-agnostic tests.
+          # Toolchain selection, in preference order:
+          #   1. Xcode 27 beta 3 or newer -> builds the full suite, incl. the
+          #      FoundationModels tests (canImport(FoundationModels, _version: 2)).
+          #      Xcode 27 beta 2 is explicitly rejected: its FoundationModels SDK
+          #      lacks the SamplingMode.Kind cases the adapter uses, so it fails
+          #      to compile (.randomTopK / .randomProbabilityThreshold).
+          #   2. Xcode 26 -> the FoundationModels adapter compiles out, so only the
+          #      SDK-agnostic suites run (MTP, Qwen3VL/Qwen3.5 vision, Coherence, ...).
+          # Fail loudly if neither is present rather than fall through to a
+          # toolchain that produces a cryptic compile error.
+          version_of() { "$1/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | head -1; }
           dev=""
-          for app in /Applications/Xcode_27*.app /Applications/Xcode-27*.app /Applications/Xcode.app; do
-            [ -d "$app" ] || continue
-            v=$("$app/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | head -1)
-            case "$v" in "Xcode 27"*) dev="$app/Contents/Developer" ;; esac
-            [ -n "$dev" ] && break
+
+          # 1) Newest usable Xcode 27 (beta 3+ or release); skip beta 1/2.
+          for app in $(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app 2>/dev/null | sort -Vr); do
+            case "$(basename "$app")" in
+              *.b1.app|*.b2.app|*.beta1.app|*.beta2.app) continue ;;
+            esac
+            case "$(version_of "$app")" in "Xcode 27"*) dev="$app/Contents/Developer"; break ;; esac
           done
-          if [ -n "$dev" ]; then
-            echo "Using Xcode 27 at $dev (full suite, incl. FoundationModels tests)"
-            echo "DEVELOPER_DIR=$dev" >> "$GITHUB_ENV"
-          else
-            echo "Xcode 27 not found; using default $(xcode-select -p)."
-            echo "FoundationModels tests will be compiled out (macOS 27 SDK required)."
+
+          # 2) Fall back to Xcode 26.
+          if [ -z "$dev" ]; then
+            for app in $(ls -d /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode.app 2>/dev/null | sort -Vr); do
+              case "$(version_of "$app")" in "Xcode 26"*) dev="$app/Contents/Developer"; break ;; esac
+            done
           fi
+
+          if [ -z "$dev" ]; then
+            echo "::error::No usable Xcode found. Need Xcode 27 beta 3+ (full suite) or Xcode 26 (SDK-agnostic subset). Xcode 27 beta 2 is not supported."
+            exit 1
+          fi
+          echo "Selected $(version_of "$(dirname "$(dirname "$dev")")") at $dev"
+          echo "DEVELOPER_DIR=$dev" >> "$GITHUB_ENV"
 
       - name: Verify MetalToolchain installed
         shell: bash
