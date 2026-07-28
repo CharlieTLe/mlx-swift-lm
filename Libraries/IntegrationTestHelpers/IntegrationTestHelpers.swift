@@ -53,7 +53,7 @@ private func withNetworkRetry<T>(
     _ label: String, attempts: Int = 3, _ operation: () async throws -> T
 ) async throws -> T {
     var lastError: Error?
-    for attempt in 1...attempts {
+    for attempt in 1 ... attempts {
         do {
             return try await operation()
         } catch {
