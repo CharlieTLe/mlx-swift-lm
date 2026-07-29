@@ -381,9 +381,11 @@ public final class VLMModelFactory: GenericModelFactory {
         mutableConfiguration.eosTokenIds = eosTokenIds
         mutableConfiguration.stopStrings.formUnion(generationConfig?.stopStrings ?? [])
 
-        // Auto-detect tool call format from model type if not explicitly set
+        // Auto-detect tool call format: ask the model, then fall back to model type
         if mutableConfiguration.toolCallFormat == nil {
-            mutableConfiguration.toolCallFormat = ToolCallFormat.infer(from: baseConfig.modelType)
+            mutableConfiguration.toolCallFormat =
+                model.declaredToolCallFormat
+                ?? ToolCallFormat.infer(from: baseConfig.modelType)
         }
 
         // Load tokenizer from model directory (or alternate tokenizer repo),
