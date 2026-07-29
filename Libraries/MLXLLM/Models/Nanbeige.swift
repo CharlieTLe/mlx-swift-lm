@@ -353,7 +353,7 @@ extension NanbeigeModel: LoRAModel {
 
 // MARK: - Chat conventions
 
-extension NanbeigeModel: ChatConventionsProviding {
+extension NanbeigeModel {
     // XML is the trained default / model-card recommendation for agentic use;
     // the chat template also supports JSON.
     public var toolCallFormat: ToolCallFormat? { .xmlFunction }

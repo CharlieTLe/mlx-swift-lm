@@ -384,7 +384,7 @@ public final class VLMModelFactory: GenericModelFactory {
         // Auto-detect tool call format: ask the model, then fall back to model type
         if mutableConfiguration.toolCallFormat == nil {
             mutableConfiguration.toolCallFormat =
-                model.declaredToolCallFormat
+                model.toolCallFormat
                 ?? ToolCallFormat.infer(from: baseConfig.modelType)
         }
 

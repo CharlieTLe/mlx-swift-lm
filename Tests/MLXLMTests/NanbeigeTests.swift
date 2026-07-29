@@ -190,14 +190,12 @@ final class NanbeigeTests: XCTestCase {
     func testDeclaresXMLFunctionToolCallFormat() throws {
         let model = NanbeigeModel(try makeConfig())
         XCTAssertEqual(model.toolCallFormat, .xmlFunction)
-        // ...and reachable through the factory-facing accessor on LanguageModel.
-        XCTAssertEqual(model.declaredToolCallFormat, .xmlFunction)
     }
 
     /// <think>/</think>, toggled via `enable_thinking` (template default true).
     func testDeclaresQwen3StyleReasoningConfig() throws {
         let model = NanbeigeModel(try makeConfig())
-        let config = try XCTUnwrap(model.declaredReasoningConfig)
+        let config = try XCTUnwrap(model.reasoningConfig)
         XCTAssertEqual(config.startDelimiter, "<think>")
         XCTAssertEqual(config.endDelimiter, "</think>")
         XCTAssertEqual(

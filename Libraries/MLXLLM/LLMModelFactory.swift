@@ -620,7 +620,7 @@ public final class LLMModelFactory: GenericModelFactory {
         // otherwise ask the model, then fall back to model_type inference.
         if mutableConfiguration.toolCallFormat == nil {
             mutableConfiguration.toolCallFormat =
-                model.declaredToolCallFormat
+                model.toolCallFormat
                 ?? ToolCallFormat.infer(from: baseConfig.modelType, configData: configData)
         }
         // Reasoning protocol falls back to inference from model_type + repo id.
@@ -628,7 +628,7 @@ public final class LLMModelFactory: GenericModelFactory {
         // (qwen2/llama) and is only recognizable by id.
         if mutableConfiguration.reasoningConfig == nil {
             mutableConfiguration.reasoningConfig =
-                model.declaredReasoningConfig
+                model.reasoningConfig
                 ?? ReasoningConfig.infer(
                     from: baseConfig.modelType, modelId: configuration.name, configData: configData)
         }
