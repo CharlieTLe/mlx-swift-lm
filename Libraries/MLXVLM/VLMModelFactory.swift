@@ -387,6 +387,13 @@ public final class VLMModelFactory: GenericModelFactory {
                 model.toolCallFormat
                 ?? ToolCallFormat.infer(from: baseConfig.modelType)
         }
+        // Reasoning protocol: ask the model, then fall back to model_type + repo id.
+        if mutableConfiguration.reasoningConfig == nil {
+            mutableConfiguration.reasoningConfig =
+                model.reasoningConfig
+                ?? ReasoningConfig.infer(
+                    from: baseConfig.modelType, modelId: configuration.name, configData: configData)
+        }
 
         // Load tokenizer from model directory (or alternate tokenizer repo),
         // processor config, and weights in parallel using async let.
@@ -441,7 +448,8 @@ public final class VLMModelFactory: GenericModelFactory {
             extraEOSTokens: mutableConfiguration.extraEOSTokens,
             stopStrings: mutableConfiguration.stopStrings,
             eosTokenIds: mutableConfiguration.eosTokenIds,
-            toolCallFormat: mutableConfiguration.toolCallFormat)
+            toolCallFormat: mutableConfiguration.toolCallFormat,
+            reasoningConfig: mutableConfiguration.reasoningConfig)
 
         return .init(
             configuration: modelConfig, model: model, processor: processor,
