@@ -372,10 +372,13 @@ final class Qwen35GatedDeltaNet: Module {
             qkv = MLX.where(mask[.ellipsis, .newAxis], qkv, 0)
         }
 
-        let convInput = concatenated([convState, qkv], axis: 1)
-        let newConvState = contiguous(convInput[0..., (-(convKernelSize - 1))..., 0...])
-
-        let convOut = silu(conv1d(convInput))
+        let fusedDecode =
+            S == 1 && mask == nil && (qkv.dtype == .float16 || qkv.dtype == .bfloat16)
+        let (convPre, newConvState) =
+            fusedDecode
+            ? decodeConv(convState: convState, qkv: qkv)
+            : generalConv(convState: convState, qkv: qkv)
+        let convOut = silu(convPre)
 
         let convSplit = MLX.split(convOut, indices: [keyDim, 2 * keyDim], axis: -1)
         let q = convSplit[0].reshaped(B, S, numKHeads, headKDim)
@@ -405,6 +408,42 @@ final class Qwen35GatedDeltaNet: Module {
 
         let gated = norm(out, gate: z)
         return (outProj(gated.reshaped(B, S, -1)), newConvState, newRecState)
+    }
+
+    /// The S == 1 depthwise conv as elementwise multiply-adds, so `compile`
+    /// folds it into the surrounding segment. f32 accumulation with a single
+    /// final round matches `generalConv`'s `Convolution` kernel bit-for-bit
+    /// for f16/bf16 (pinned by `Qwen35GDNDecodeBitwiseTests`); the kernel's
+    /// own f32 accumulation orders differently, so f32 input stays on
+    /// `generalConv`.
+    func decodeConv(
+        convState: MLXArray, qkv: MLXArray
+    ) -> (conv: MLXArray, state: MLXArray) {
+        var acc =
+            convState[0..., 0, 0...].asType(.float32)
+            * conv1d.weight[0..., 0, 0].asType(.float32)
+        for tap in 1 ..< convKernelSize {
+            let row =
+                tap < convKernelSize - 1
+                ? convState[0..., tap, 0...] : qkv[0..., 0, 0...]
+            acc = acc + row.asType(.float32) * conv1d.weight[0..., tap, 0].asType(.float32)
+        }
+        return (
+            acc.asType(qkv.dtype).reshaped(convState.dim(0), 1, convDim),
+            concatenated([convState[0..., 1..., 0...], qkv], axis: 1)
+        )
+    }
+
+    /// The sliding-window conv via MLX's `Convolution` kernel — the reference
+    /// `decodeConv` is pinned against.
+    func generalConv(
+        convState: MLXArray, qkv: MLXArray
+    ) -> (conv: MLXArray, state: MLXArray) {
+        let convInput = concatenated([convState, qkv], axis: 1)
+        return (
+            conv1d(convInput),
+            contiguous(convInput[0..., (-(convKernelSize - 1))..., 0...])
+        )
     }
 }
 
