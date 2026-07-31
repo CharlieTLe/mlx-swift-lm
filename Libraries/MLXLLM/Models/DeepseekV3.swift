@@ -477,3 +477,9 @@ public class DeepseekV3Model: Module, LLMModel, KVCacheDimensionProvider, LoRAMo
         model.layers
     }
 }
+
+// MARK: - Chat conventions
+
+extension DeepseekV3Model {
+    public var reasoningConfig: ReasoningConfig? { .alwaysOnThinking }
+}

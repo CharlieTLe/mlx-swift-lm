@@ -381,18 +381,21 @@ public final class VLMModelFactory: GenericModelFactory {
         mutableConfiguration.eosTokenIds = eosTokenIds
         mutableConfiguration.stopStrings.formUnion(generationConfig?.stopStrings ?? [])
 
-        // Auto-detect tool call format: ask the model, then fall back to model type
+        // Chat conventions. Precedence: an explicit value on the configuration
+        // (registry entry or caller) wins; then a registered resolver, which sees
+        // the repo id the model cannot; then the model's own declaration.
+        let modelId = configuration.name
         if mutableConfiguration.toolCallFormat == nil {
             mutableConfiguration.toolCallFormat =
-                model.toolCallFormat
-                ?? ToolCallFormat.infer(from: baseConfig.modelType)
+                ChatConventionsRegistry.shared.toolCallFormat(
+                    modelId: modelId, modelType: baseConfig.modelType)
+                ?? model.toolCallFormat
         }
-        // Reasoning protocol: ask the model, then fall back to model_type + repo id.
         if mutableConfiguration.reasoningConfig == nil {
             mutableConfiguration.reasoningConfig =
-                model.reasoningConfig
-                ?? ReasoningConfig.infer(
-                    from: baseConfig.modelType, modelId: configuration.name, configData: configData)
+                ChatConventionsRegistry.shared.reasoningConfig(
+                    modelId: modelId, modelType: baseConfig.modelType)
+                ?? model.reasoningConfig
         }
 
         // Load tokenizer from model directory (or alternate tokenizer repo),
