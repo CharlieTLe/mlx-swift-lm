@@ -83,6 +83,23 @@ final class ChatConventionsModelTests: XCTestCase {
         // Qwen3 (unlike Qwen3.5) declares no tool-call format.
         XCTAssertNil(model.toolCallFormat)
     }
+
+    // MARK: Registry injection
+
+    /// The factories take a `ChatConventionsRegistry` rather than reaching for
+    /// `.shared`, so a caller can supply their own resolvers.
+    func testFactoryUsesInjectedConventionsRegistry() {
+        let registry = ChatConventionsRegistry()
+        let factory = LLMModelFactory(
+            typeRegistry: LLMTypeRegistry.shared, modelRegistry: LLMRegistry.shared,
+            conventionsRegistry: registry)
+        XCTAssertTrue(factory.conventionsRegistry === registry)
+
+        // The default remains the shared registry.
+        let defaulted = LLMModelFactory(
+            typeRegistry: LLMTypeRegistry.shared, modelRegistry: LLMRegistry.shared)
+        XCTAssertTrue(defaulted.conventionsRegistry === ChatConventionsRegistry.shared)
+    }
 }
 
 // MARK: - Presets and the resolver registry
@@ -200,6 +217,39 @@ struct ChatConventionsTests {
         let registry = ChatConventionsRegistry(resolvers: [ByType()])
         #expect(registry.toolCallFormat(modelId: "a/b", modelType: "special") == .minimaxM2)
         #expect(registry.toolCallFormat(modelId: "a/b", modelType: "other") == nil)
+    }
+
+    /// Plain DeepSeek-V3 must not be handed always-on reasoning. `deepseek_v3` is an
+    /// architecture shared with R1, so nothing keys on that type; only the R1 repo
+    /// ids resolve. (Previously `ReasoningConfig.infer` matched the bare type and
+    /// treated plain V3 as a reasoning model.)
+    @Test func plainDeepSeekV3GetsNoReasoning() {
+        #expect(
+            ChatConventionsRegistry.shared.reasoningConfig(
+                modelId: "mlx-community/DeepSeek-V3-4bit", modelType: "deepseek_v3") == nil)
+        // R1 proper, same architecture, still resolves by id.
+        #expect(
+            ChatConventionsRegistry.shared.reasoningConfig(
+                modelId: "mlx-community/DeepSeek-R1-4bit", modelType: "deepseek_v3")
+                == .alwaysOnThinking)
+    }
+
+    /// Resolvers run outside the registry's lock, so a resolver that re-enters the
+    /// registry must not deadlock. `NSLock` is not recursive, so doing the lookup
+    /// under the lock would hang here rather than fail.
+    @Test func reentrantResolverDoesNotDeadlock() {
+        final class Reentrant: ChatConventionsResolving {
+            nonisolated(unsafe) var registry: ChatConventionsRegistry?
+            func toolCallFormat(modelId: String, modelType: String) -> ToolCallFormat? {
+                // Re-enter: ask the same registry something else mid-resolution.
+                _ = registry?.reasoningConfig(modelId: modelId, modelType: modelType)
+                return .json
+            }
+        }
+        let resolver = Reentrant()
+        let registry = ChatConventionsRegistry(resolvers: [resolver])
+        resolver.registry = registry
+        #expect(registry.toolCallFormat(modelId: "a/b", modelType: "t") == .json)
     }
 }
 

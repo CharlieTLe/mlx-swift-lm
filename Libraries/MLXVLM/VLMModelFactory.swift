@@ -311,11 +311,13 @@ public final class VLMModelFactory: GenericModelFactory {
 
     public init(
         typeRegistry: ModelTypeRegistry<LanguageModel>, processorRegistry: ProcessorTypeRegistry,
-        modelRegistry: AbstractModelRegistry
+        modelRegistry: AbstractModelRegistry,
+        conventionsRegistry: ChatConventionsRegistry = .shared
     ) {
         self.typeRegistry = typeRegistry
         self.processorRegistry = processorRegistry
         self.modelRegistry = modelRegistry
+        self.conventionsRegistry = conventionsRegistry
     }
 
     /// Shared instance with default behavior.
@@ -331,6 +333,10 @@ public final class VLMModelFactory: GenericModelFactory {
 
     /// registry of model id to configuration, e.g. `mlx-community/paligemma-3b-mix-448-8bit`
     public let modelRegistry: AbstractModelRegistry
+
+    /// resolvers for chat conventions that are keyed on model id rather than declared
+    /// by the model itself, e.g. DeepSeek-R1
+    public let conventionsRegistry: ChatConventionsRegistry
 
     public func _load(
         configuration: ResolvedModelConfiguration,
@@ -387,13 +393,13 @@ public final class VLMModelFactory: GenericModelFactory {
         let modelId = configuration.name
         if mutableConfiguration.toolCallFormat == nil {
             mutableConfiguration.toolCallFormat =
-                ChatConventionsRegistry.shared.toolCallFormat(
+                conventionsRegistry.toolCallFormat(
                     modelId: modelId, modelType: baseConfig.modelType)
                 ?? model.toolCallFormat
         }
         if mutableConfiguration.reasoningConfig == nil {
             mutableConfiguration.reasoningConfig =
-                ChatConventionsRegistry.shared.reasoningConfig(
+                conventionsRegistry.reasoningConfig(
                     modelId: modelId, modelType: baseConfig.modelType)
                 ?? model.reasoningConfig
         }

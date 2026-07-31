@@ -551,10 +551,12 @@ public final class LLMModelFactory: GenericModelFactory {
     public typealias ContainerType = ModelContainer
 
     public init(
-        typeRegistry: ModelTypeRegistry<LanguageModel>, modelRegistry: AbstractModelRegistry
+        typeRegistry: ModelTypeRegistry<LanguageModel>, modelRegistry: AbstractModelRegistry,
+        conventionsRegistry: ChatConventionsRegistry = .shared
     ) {
         self.typeRegistry = typeRegistry
         self.modelRegistry = modelRegistry
+        self.conventionsRegistry = conventionsRegistry
     }
 
     /// Shared instance with default behavior.
@@ -566,6 +568,10 @@ public final class LLMModelFactory: GenericModelFactory {
 
     /// registry of model id to configuration, e.g. `mlx-community/Llama-3.2-3B-Instruct-4bit`
     public let modelRegistry: AbstractModelRegistry
+
+    /// resolvers for chat conventions that are keyed on model id rather than declared
+    /// by the model itself, e.g. DeepSeek-R1
+    public let conventionsRegistry: ChatConventionsRegistry
 
     public func _load(
         configuration: ResolvedModelConfiguration,
@@ -622,13 +628,13 @@ public final class LLMModelFactory: GenericModelFactory {
         let modelId = configuration.name
         if mutableConfiguration.toolCallFormat == nil {
             mutableConfiguration.toolCallFormat =
-                ChatConventionsRegistry.shared.toolCallFormat(
+                conventionsRegistry.toolCallFormat(
                     modelId: modelId, modelType: baseConfig.modelType)
                 ?? model.toolCallFormat
         }
         if mutableConfiguration.reasoningConfig == nil {
             mutableConfiguration.reasoningConfig =
-                ChatConventionsRegistry.shared.reasoningConfig(
+                conventionsRegistry.reasoningConfig(
                     modelId: modelId, modelType: baseConfig.modelType)
                 ?? model.reasoningConfig
         }

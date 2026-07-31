@@ -64,20 +64,26 @@ public final class ChatConventionsRegistry: @unchecked Sendable {
 
     /// First tool-call format offered by a resolver, in reverse registration order.
     public func toolCallFormat(modelId: String, modelType: String) -> ToolCallFormat? {
-        lock.withLock {
-            resolvers.reversed().lazy
-                .compactMap { $0.toolCallFormat(modelId: modelId, modelType: modelType) }
-                .first
-        }
+        snapshot().lazy
+            .compactMap { $0.toolCallFormat(modelId: modelId, modelType: modelType) }
+            .first
     }
 
     /// First reasoning config offered by a resolver, in reverse registration order.
     public func reasoningConfig(modelId: String, modelType: String) -> ReasoningConfig? {
-        lock.withLock {
-            resolvers.reversed().lazy
-                .compactMap { $0.reasoningConfig(modelId: modelId, modelType: modelType) }
-                .first
-        }
+        snapshot().lazy
+            .compactMap { $0.reasoningConfig(modelId: modelId, modelType: modelType) }
+            .first
+    }
+
+    /// Resolvers in precedence order (most recently registered first).
+    ///
+    /// Copied out under the lock so resolvers run *outside* it: they can be
+    /// implemented outside this package, so invoking one while holding a
+    /// non-recursive lock would deadlock if it re-entered the registry, and would
+    /// hold the registry closed for the duration of arbitrary work.
+    private func snapshot() -> [any ChatConventionsResolving] {
+        lock.withLock { resolvers.reversed() }
     }
 }
 
@@ -85,10 +91,14 @@ public final class ChatConventionsRegistry: @unchecked Sendable {
 
 /// Recognizes DeepSeek-R1 and its distills by repo id.
 ///
-/// R1-Distill checkpoints report a base `model_type` (`qwen2` / `llama`), so no
-/// model instance can declare their always-on reasoning. Plain DeepSeek-V3 shares
-/// R1's `deepseek_v3` model type and declares reasoning itself, so this resolver
-/// keys purely on the id.
+/// Two reasons this cannot be a model declaration:
+///
+/// - R1-Distill checkpoints report a base `model_type` (`qwen2` / `llama`), which is
+///   indistinguishable from plain Qwen2.5 / Llama.
+/// - R1 proper reports `deepseek_v3`, an architecture it shares with DeepSeek-V3.
+///   Always-on reasoning belongs to the R1 checkpoints and their chat template, not
+///   to that architecture, so declaring it on `DeepseekV3Model` would wrongly
+///   advertise reasoning for plain V3.
 public struct DeepSeekR1ConventionsResolver: ChatConventionsResolving {
 
     public init() {}
