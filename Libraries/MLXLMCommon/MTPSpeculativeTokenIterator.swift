@@ -38,8 +38,12 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
     let drafter: any MTPDrafterModel
 
     var mainState: LMOutput.State?
-    var mainCache: [KVCache]
-    let quantizeKVCache: (inout [KVCache]) -> Void
+    let mainCacheStorage: KVCacheStorage
+    var mainCache: [KVCache] {
+        get { mainCacheStorage.cache }
+        set { mainCacheStorage.replace(with: newValue) }
+    }
+    var kvCachePlan: KVCachePlan { mainCacheStorage.plan }
 
     var processor: LogitProcessor?
     let sampler: LogitSampler
@@ -108,30 +112,25 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
             blockSize >= 2,
             "MTPSpeculativeTokenIterator requires blockSize >= 2 (1 bonus + K-1 drafted)")
 
+        let kvCachePlan = try parameters.kvCachePlan()
+        let mainCache = try kvCachePlan.validated(
+            mainCache ?? mainModel.newCache(parameters: parameters))
+        guard canTrimPromptCache(mainCache) else {
+            throw KVCacheError(
+                message: "MTP speculative decoding requires a trimmable main KV cache.")
+        }
+
         self.y = input.text
         self.mainModel = mainModel
         self.drafter = drafter
 
-        self.mainCache = mainCache ?? mainModel.newCache(parameters: parameters)
-        guard canTrimPromptCache(self.mainCache) else {
-            throw KVCacheError(
-                message: "MTP speculative decoding requires a trimmable main KV cache.")
-        }
+        self.mainCacheStorage = KVCacheStorage(mainCache, plan: kvCachePlan)
 
         self.sampler = parameters.sampler()
         self.processor = components.logitProcessor(parameters: parameters)
 
         self.maxTokens = parameters.maxTokens
         self.blockSize = blockSize
-
-        self.quantizeKVCache = { cache in
-            maybeQuantizeKVCache(
-                cache: &cache,
-                kvBits: parameters.kvBits,
-                kvGroupSize: parameters.kvGroupSize,
-                quantizedKVStart: parameters.quantizedKVStart
-            )
-        }
 
         let prefillStart = Date.timeIntervalSinceReferenceDate
         try prepare(input: input, windowSize: parameters.prefillStepSize)
@@ -153,6 +152,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
     /// prime; its first-round inputs come from the prefill's `LMOutput.state`.
     mutating func prepare(input: LMInput, windowSize: Int? = nil) throws {
         processor?.prompt(input.text.tokens)
+        let inputLength = input.text.cacheSequenceLength
 
         var prefillState = LMOutput.State()
         prefillState[mtpEmitFlagKey] = true
@@ -164,10 +164,16 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
         switch try mainModel.prepare(input, cache: mainCache, state: nil, windowSize: windowSize)
         {
         case .tokens(let tokens):
+            let remainingLength = tokens.cacheSequenceLength
+            precondition(
+                remainingLength <= inputLength,
+                "Main model prepare returned more tokens than it received")
+            mainCacheStorage.commitProcessedTokens(inputLength - remainingLength)
             y = tokens
             // Final prompt position not yet evaluated -- run one forward to
             // produce the bonus token AND prime drafter state.
             let result = mainModel(y[text: .newAxis], cache: mainCache, state: prefillState)
+            mainCacheStorage.commitProcessedTokens(y.cacheSequenceLength)
             var logits = result.logits[0..., -1, 0...]
             logits = processor?.process(logits: logits) ?? logits
             let token = sampler.sample(logits: logits)
@@ -180,6 +186,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
             // decoding's bit-exact-equivalence-to-greedy guarantee.
             pendingTokens.append(token.item(Int.self))
         case .logits(let prefillResult):
+            mainCacheStorage.commitProcessedTokens(inputLength)
             // Some `prepare` implementations evaluate the final position
             // themselves and return logits directly; their `state` here may
             // or may not carry drafter state depending on whether the model
@@ -198,6 +205,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
                 || mainState?[mtpSharedKVStatesKey] == nil
             {
                 let primed = mainModel(y[text: .newAxis], cache: mainCache, state: prefillState)
+                mainCacheStorage.commitProcessedTokens(y.cacheSequenceLength)
                 mainState = primed.state
                 // Resample bonus from this forward's logits so the chain stays
                 // coherent at this position (the cache offset moves by 1, so
@@ -220,6 +228,8 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
                 pendingTokens.append(token.item(Int.self))
             }
         }
+
+        try kvCachePlan.applyAndValidate(to: mainCacheStorage)
     }
 
     /// Single round: draft `blockSize - 1` tokens, verify with main, accept
@@ -279,7 +289,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
             bonusSlotHidden = lastHidden[0..., (-1)..., 0...]
         }
 
-        let cacheOffset = mainCache.first?.offset ?? 0
+        let cacheOffset = mainCacheStorage.processedTokenCount
 
         // Invariant: the span the drafter attends over describes exactly the
         // true sequence — the rewind site trims the emitted snapshot in
@@ -315,6 +325,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
         let verifyStart = verifyInput.tokens.dim(0) - (numDraft + 1)
         let mainResult = mainModel(
             verifyInput[text: .newAxis], cache: mainCache, state: verifyState)
+        mainCacheStorage.commitProcessedTokens(verifyInput.cacheSequenceLength)
         let mainLogits = mainResult.logits
         mainState = mainResult.state
 
@@ -381,13 +392,13 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
         // untrimmable (post-wrap sliding window), where trimPromptCache
         // no-ops and returns 0.
         let rejected = numDraft - accepted
-        let trimmed = trimPromptCache(mainCache, numTokens: rejected)
+        let trimmed = mainCacheStorage.trim(rejected)
         trimSharedKVState(&mainState, numTokens: trimmed)
 
         // Dynamic cache quantization may convert `.regular` K/V to `.quantized`,
         // at which point the target's emit-hook returns sharedKV: nil and the
         // next round transitions to passthrough.
-        quantizeKVCache(&mainCache)
+        kvCachePlan.apply(to: mainCacheStorage)
 
         y = .init(tokens: finalToken)
     }
@@ -442,6 +453,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
         if let maxTokens, tokenCount >= maxTokens { return nil }
 
         let result = mainModel(y[text: .newAxis], cache: mainCache, state: nil)
+        mainCacheStorage.commitProcessedTokens(y.cacheSequenceLength)
         var logits = result.logits[0..., -1, 0...]
         logits = processor?.process(logits: logits) ?? logits
         let token = sampler.sample(logits: logits)
@@ -449,7 +461,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
         eval(token)
         let tokenInt = token.item(Int.self)
         y = .init(tokens: token)
-        quantizeKVCache(&mainCache)
+        kvCachePlan.apply(to: mainCacheStorage)
         return tokenInt
     }
 
