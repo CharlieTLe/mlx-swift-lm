@@ -578,6 +578,12 @@ public protocol TokenIteratorProtocol: Sequence, IteratorProtocol where Element 
     mutating func discardGeneratedToken()
 }
 
+/// Internal lifecycle capability for iterators that retain generation work
+/// which must be reconciled after the token loop stops.
+protocol GenerationFinalizingTokenIterator: TokenIteratorProtocol {
+    mutating func finalizeGeneration()
+}
+
 extension TokenIteratorProtocol {
     public var speculativeDecodingTelemetry: SpeculativeDecodingTelemetry? { nil }
     public mutating func discardGeneratedToken() {}
@@ -891,6 +897,11 @@ public struct SpeculativeTokenIterator: TokenIteratorProtocol {
     // Buffer of accepted tokens from the current speculation round
     private var pendingTokens = [Int]()
     private var pendingIndex = 0
+    /// Pending tokens already represented by each cache. The final token in a
+    /// speculative round is sampled from the verifier logits but is not fed
+    /// back into either model yet, so it is deliberately excluded.
+    private var mainCommittedPendingTokenCount = 0
+    private var draftCommittedPendingTokenCount = 0
 
     // Internal metrics
     public var promptPrefillTime: TimeInterval = 0.0
@@ -1103,6 +1114,12 @@ public struct SpeculativeTokenIterator: TokenIteratorProtocol {
         let finalToken = mainTokens[accepted ... accepted]
         processor?.didSample(token: finalToken)
         pendingTokens.append(mainTokensList[accepted])
+        mainCommittedPendingTokenCount = accepted
+        // When every draft is accepted the draft cache still trails the main
+        // cache by one accepted token; `draftY` carries that token into the
+        // next round. Otherwise both caches contain the accepted prefix.
+        draftCommittedPendingTokenCount =
+            accepted == numDraft ? Swift.max(accepted - 1, 0) : accepted
 
         telemetry.recordRound(
             drafted: numDraft,
@@ -1152,6 +1169,8 @@ public struct SpeculativeTokenIterator: TokenIteratorProtocol {
         // across the whole generation.
         pendingTokens.removeAll(keepingCapacity: true)
         pendingIndex = 0
+        mainCommittedPendingTokenCount = 0
+        draftCommittedPendingTokenCount = 0
         autoreleasepool { speculateRound() }
 
         if pendingTokens.isEmpty {
@@ -1162,6 +1181,26 @@ public struct SpeculativeTokenIterator: TokenIteratorProtocol {
         pendingIndex += 1
         telemetry.recordGeneratedToken()
         return token
+    }
+
+}
+
+extension SpeculativeTokenIterator: GenerationFinalizingTokenIterator {
+    mutating func finalizeGeneration() {
+        // Trim through the storages so the model-wide processed-token timeline
+        // rewinds with the caches; `ChatSession` reconciles its ledger against
+        // that timeline, not against per-entry offsets.
+        let mainConsumed = Swift.min(pendingIndex, mainCommittedPendingTokenCount)
+        let mainLookahead = mainCommittedPendingTokenCount - mainConsumed
+        if mainLookahead > 0 {
+            mainCacheStorage.trim(mainLookahead)
+        }
+
+        let draftConsumed = Swift.min(pendingIndex, draftCommittedPendingTokenCount)
+        let draftLookahead = draftCommittedPendingTokenCount - draftConsumed
+        if draftLookahead > 0 {
+            draftCacheStorage.trim(draftLookahead)
+        }
     }
 }
 
@@ -1751,7 +1790,7 @@ func generateTaskRecordingTokens<TOKEN: TokenIteratorProtocol>(
 /// Generates raw token IDs asynchronously using the provided language model input, parameters, and context.
 ///
 /// This is similar to `generate(input:cache:parameters:context:)`, but yields raw token IDs instead of decoded text/tool calls.
-/// This is useful for downstream parsers that need access to token IDs directly (e.g. Harmony parsing).
+/// This is useful for downstream parsers that need access to token IDs directly.
 ///
 /// - Parameters:
 ///   - input: The input for the language model.
@@ -1986,8 +2025,8 @@ public func generateTokensTask(
 /// Low-level raw token generation using a `TokenIterator`, returning an
 /// `AsyncStream<TokenGeneration>` and a `Task`.
 ///
-/// This is useful for parsers that need access to the token IDs directly (e.g. Harmony parsing)
-/// without detokenization or tool-call parsing.
+/// This is useful for parsers that need access to token IDs directly, without
+/// detokenization or tool-call parsing.
 ///
 /// - Parameters:
 ///   - promptTokenCount: number of tokens in the prompt
@@ -2092,10 +2131,11 @@ private func generateLoopTask<
             var tokenCount = 0
             var stopReason: GenerateStopReason?
 
-            let stopTokenIds = buildStopTokenIds(
+            var stopTokenIds = buildStopTokenIds(
                 modelConfiguration: modelConfiguration,
                 tokenizer: tokenizer
             )
+            stopTokenIds.formUnion(handler.additionalStopTokenIDs)
 
             // Check cancellation BEFORE iterator.next(): next() calls asyncEval() to
             // pipeline the next GPU evaluation, so checking after it (the previous
@@ -2116,8 +2156,15 @@ private func generateLoopTask<
 
                 // Check for end-of-sequence tokens
                 if token == tokenizer.unknownTokenId || stopTokenIds.contains(token) {
-                    if includeStopToken {
-                        tokenCount += 1
+                    let deliverToHandler =
+                        includeStopToken
+                        || (handler.receivesStopTokens && stopTokenIds.contains(token))
+                    if deliverToHandler {
+                        if includeStopToken {
+                            tokenCount += 1
+                        } else {
+                            iterator.discardGeneratedToken()
+                        }
                         switch handler.onStopToken(token, emit: continuation.yield) {
                         case .more:
                             break
@@ -2156,6 +2203,18 @@ private func generateLoopTask<
                 } else {
                     stopReason = .cancelled
                 }
+            }
+
+            // Speculative iterators verify several candidates at once. A stop
+            // token, consumer termination, or token limit can leave verified
+            // but unreturned candidates in their shared caches. Remove that
+            // lookahead before ChatSession reconciles its token ledger.
+            if var finalizing = iterator as? any GenerationFinalizingTokenIterator {
+                finalizing.finalizeGeneration()
+                // Write back: the cast copies the iterator, and the trim also
+                // updates state held inline by the iterator (not just the
+                // reference-typed caches) that later reads still observe.
+                iterator = finalizing
             }
 
             handler.onGenerationEnd(emit: continuation.yield)
@@ -2396,10 +2455,23 @@ private enum TokenLoopDisposition {
     case more
     case stop
     case cancelled
+
+    var shouldContinue: Bool {
+        if case .more = self { return true }
+        return false
+    }
 }
 
 private protocol TokenLoopHandler {
     associatedtype Output
+
+    /// Semantic boundaries contributed by the response protocol handled by
+    /// this consumer. Raw-token consumers intentionally contribute none.
+    var additionalStopTokenIDs: Set<Int> { get }
+
+    /// Whether semantic parsing needs to observe EOS tokens even though they
+    /// are not included in the public output or generation token count.
+    var receivesStopTokens: Bool { get }
 
     /// Return `.stop` for semantic generation stops, or `.cancelled` for consumer termination.
     mutating func onToken(
@@ -2407,7 +2479,8 @@ private protocol TokenLoopHandler {
         emit: (sending Output) -> AsyncStream<Output>.Continuation.YieldResult
     ) -> TokenLoopDisposition
 
-    /// Called only when includeStopToken == true and a stop token was hit.
+    /// Called when `includeStopToken` is true or ``receivesStopTokens`` is true
+    /// and a stop token was hit.
     mutating func onStopToken(
         _ token: Int,
         emit: (sending Output) -> AsyncStream<Output>.Continuation.YieldResult
@@ -2421,186 +2494,96 @@ private protocol TokenLoopHandler {
     func infoEvent(_ info: GenerateCompletionInfo) -> Output
 }
 
-struct StopStringFilter {
-    let stopStrings: [String]
-    var buffer = ""
-    var stopped = false
-
-    init(stopStrings: Set<String>) {
-        self.stopStrings = stopStrings.filter { !$0.isEmpty }.sorted {
-            if $0.count == $1.count {
-                return $0 < $1
-            }
-            return $0.count > $1.count
-        }
-    }
-
-    var isEnabled: Bool {
-        !stopStrings.isEmpty
-    }
-
-    mutating func process(_ chunk: String) -> (text: String?, stopped: Bool) {
-        guard !stopped else {
-            return (nil, true)
-        }
-        guard isEnabled else {
-            return (chunk.isEmpty ? nil : chunk, false)
-        }
-
-        buffer += chunk
-
-        if let stopRange = earliestStopRange(in: buffer) {
-            let text = String(buffer[..<stopRange.lowerBound])
-            buffer = ""
-            stopped = true
-            return (text.isEmpty ? nil : text, true)
-        }
-
-        let suffixLength = longestStopPrefixSuffixLength(in: buffer)
-        let emitEnd = buffer.index(buffer.endIndex, offsetBy: -suffixLength)
-        let text = String(buffer[..<emitEnd])
-        buffer = String(buffer[emitEnd...])
-        return (text.isEmpty ? nil : text, false)
-    }
-
-    mutating func finish() -> String? {
-        guard isEnabled, !stopped, !buffer.isEmpty else {
-            return nil
-        }
-        let text = buffer
-        buffer = ""
-        return text
-    }
-
-    private func earliestStopRange(in text: String) -> Range<String.Index>? {
-        var earliest: Range<String.Index>?
-        for stopString in stopStrings {
-            guard let range = text.range(of: stopString) else {
-                continue
-            }
-            if let current = earliest {
-                if range.lowerBound < current.lowerBound {
-                    earliest = range
-                }
-            } else {
-                earliest = range
-            }
-        }
-        return earliest
-    }
-
-    private func longestStopPrefixSuffixLength(in text: String) -> Int {
-        var longest = 0
-        for stopString in stopStrings {
-            let maxLength = Swift.min(text.count, stopString.count - 1)
-            guard maxLength > longest else {
-                continue
-            }
-            for length in stride(from: maxLength, through: longest + 1, by: -1) {
-                if text.suffix(length) == stopString.prefix(length) {
-                    longest = length
-                    break
-                }
-            }
-        }
-        return longest
-    }
+extension TokenLoopHandler {
+    var additionalStopTokenIDs: Set<Int> { [] }
+    var receivesStopTokens: Bool { false }
 }
 
 private struct TextToolTokenLoopHandler: TokenLoopHandler {
     typealias Output = Generation
 
-    var detokenizer: NaiveStreamingDetokenizer
-    var stopStringFilter: StopStringFilter
-    let toolCallProcessor: ToolCallProcessor
+    private var decoder: any TokenStreamDecoder
 
     init(
         tokenizer: Tokenizer, stopStrings: Set<String> = [], format: ToolCallFormat,
         tools: [[String: any Sendable]]? = nil
     ) {
-        detokenizer = NaiveStreamingDetokenizer(tokenizer: tokenizer)
-        stopStringFilter = StopStringFilter(stopStrings: stopStrings)
-        toolCallProcessor = ToolCallProcessor(format: format, tools: tools)
+        self.decoder = format.makeTokenStreamDecoder(
+            tokenizer: tokenizer, tools: tools, stopStrings: stopStrings)
     }
+
+    var additionalStopTokenIDs: Set<Int> { decoder.additionalStopTokenIDs }
+    var receivesStopTokens: Bool { decoder.receivesStopTokens }
 
     mutating func onToken(
         _ token: Int,
         emit: (sending Generation) -> AsyncStream<Generation>.Continuation.YieldResult
     ) -> TokenLoopDisposition {
-        detokenizer.append(token: token)
-        if let chunk = detokenizer.next() {
-            let result = stopStringFilter.process(chunk)
-            if let text = result.text {
-                let disposition = processText(text, emit: emit)
-                if case .more = disposition {
-                } else {
-                    return disposition
-                }
-            }
-            if result.stopped {
-                return .stop
-            }
-        }
-
-        return .more
+        process(token, emit: emit)
     }
 
     mutating func onStopToken(
         _ token: Int,
         emit: (sending Generation) -> AsyncStream<Generation>.Continuation.YieldResult
     ) -> TokenLoopDisposition {
-        .more
+        guard decoder.receivesStopTokens else { return .more }
+        return process(token, emit: emit)
     }
 
     mutating func onGenerationEnd(
         emit: (sending Generation) -> AsyncStream<Generation>.Continuation.YieldResult
     ) {
-        if let text = stopStringFilter.finish() {
-            guard case .more = processText(text, emit: emit) else {
-                return
-            }
+        var decoder = self.decoder
+        var disposition = TokenLoopDisposition.more
+        _ = decoder.finish { event in
+            disposition = process(event, emit: emit)
+            return disposition.shouldContinue
         }
-
-        if let bufferedText = toolCallProcessor.processEOS(returnBufferedText: true),
-            !bufferedText.isEmpty
-        {
-            if case .terminated = emit(.chunk(bufferedText)) {
-                return
-            }
-        }
-
-        for toolCall in toolCallProcessor.drainToolCalls() {
-            if case .terminated = emit(.toolCall(toolCall)) {
-                break
-            }
-        }
+        self.decoder = decoder
     }
 
     func infoEvent(_ info: GenerateCompletionInfo) -> Generation {
         .info(info)
     }
 
-    private mutating func processText(
-        _ text: String,
+    private mutating func process(
+        _ token: Int,
         emit: (sending Generation) -> AsyncStream<Generation>.Continuation.YieldResult
     ) -> TokenLoopDisposition {
-        guard !text.isEmpty else {
-            return .more
+        var decoder = self.decoder
+        var disposition = TokenLoopDisposition.more
+        let completed = decoder.push(token) { event in
+            disposition = process(event, emit: emit)
+            return disposition.shouldContinue
         }
+        self.decoder = decoder
 
-        if let textToYield = toolCallProcessor.processChunk(text) {
-            if case .terminated = emit(.chunk(textToYield)) {
+        if disposition.shouldContinue {
+            return completed ? .more : .cancelled
+        }
+        return disposition
+    }
+
+    private mutating func process(
+        _ event: TokenStreamEvent,
+        emit: (sending Generation) -> AsyncStream<Generation>.Continuation.YieldResult
+    ) -> TokenLoopDisposition {
+        switch event {
+        case .response(let response):
+            if case .terminated = emit(.chunk(response)) {
                 return .cancelled
             }
-        }
+            return .more
 
-        for toolCall in toolCallProcessor.drainToolCalls() {
+        case .toolCall(let toolCall):
             if case .terminated = emit(.toolCall(toolCall)) {
                 return .cancelled
             }
-        }
+            return .more
 
-        return .more
+        case .stop:
+            return .stop
+        }
     }
 }
 
