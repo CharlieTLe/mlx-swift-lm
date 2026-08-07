@@ -392,6 +392,7 @@ await session.clear()
 | [references/training.md](references/training.md) | LoRATrain API, fine-tuning |
 | [references/embeddings.md](references/embeddings.md) | EmbeddingModel, pooling, use cases |
 | [references/model-porting.md](references/model-porting.md) | Porting models from Python MLX-LM to Swift |
+| [references/interpretability.md](references/interpretability.md) | Reading and editing the residual stream: Jacobian lens, activation patching |
 
 ## 8. Deprecated Patterns Summary
 
