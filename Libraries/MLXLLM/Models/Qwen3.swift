@@ -134,7 +134,9 @@ class Qwen3TransformerBlock: Module {
 public class Qwen3ModelInner: Module {
     @ModuleInfo(key: "embed_tokens") var embedTokens: Embedding
 
-    fileprivate let layers: [Qwen3TransformerBlock]
+    // Internal rather than fileprivate so `Qwen3+ResidualStream.swift` can walk
+    // the stack. Still module-private.
+    let layers: [Qwen3TransformerBlock]
     let norm: RMSNorm
 
     public init(_ args: Qwen3Configuration) {
@@ -151,15 +153,27 @@ public class Qwen3ModelInner: Module {
     }
 
     public func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
+        forward(inputs, cache: cache, collectHiddenStates: false).hidden
+    }
+
+    /// The layer loop, optionally reporting the residual stream at every boundary.
+    /// See `collectHiddenStatesKey` for the retention cost of collecting.
+    func forward(
+        _ inputs: MLXArray, cache: [KVCache]? = nil, collectHiddenStates: Bool
+    ) -> (hidden: MLXArray, hiddenStates: [MLXArray]?) {
         var h = embedTokens(inputs)
 
         let mask = createAttentionMask(h: h, cache: cache?.first)
 
+        var states: [MLXArray]? = collectHiddenStates ? [h] : nil
+        states?.reserveCapacity(layers.count + 1)
+
         for (i, layer) in layers.enumerated() {
             h = layer(h, mask: mask, cache: cache?[i])
+            states?.append(h)
         }
 
-        return norm(h)
+        return (norm(h), states)
     }
 }
 
@@ -191,6 +205,23 @@ public class Qwen3Model: Module, LLMModel, KVCacheDimensionProvider {
             out = model.embedTokens.asLinear(out)
         }
         return out
+    }
+
+    /// State-aware entry point. See `collectHiddenStatesKey`.
+    public func callAsFunction(
+        _ input: LMInput.Text, cache: [KVCache]?, state: LMOutput.State?
+    ) -> LMOutput {
+        guard state?.collectsHiddenStates == true else {
+            return LMOutput(logits: callAsFunction(input.tokens, cache: cache))
+        }
+
+        let (out, hiddenStates) = model.forward(
+            input.tokens, cache: cache, collectHiddenStates: true)
+        let logits = lmHead.map { $0(out) } ?? model.embedTokens.asLinear(out)
+
+        var outputState = LMOutput.State()
+        outputState[hiddenStatesKey] = hiddenStates
+        return LMOutput(logits: logits, state: outputState)
     }
 
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
@@ -231,6 +262,29 @@ public struct Qwen3Configuration: Codable, Sendable {
         case ropeScaling = "rope_scaling"
         case tieWordEmbeddings = "tie_word_embeddings"
         case maxPositionEmbeddings = "max_position_embeddings"
+    }
+
+    /// Memberwise initializer. `Codable` synthesis is suppressed by the custom
+    /// `init(from:)` below, and tests need to build tiny random-weight models
+    /// without a checkpoint — see `Tests/MLXInterpretTests`.
+    public init(
+        hiddenSize: Int, hiddenLayers: Int, intermediateSize: Int, attentionHeads: Int,
+        rmsNormEps: Float, vocabularySize: Int, kvHeads: Int, headDim: Int,
+        ropeTheta: Float = 1_000_000, ropeScaling: [String: StringOrNumber]? = nil,
+        tieWordEmbeddings: Bool = false, maxPositionEmbeddings: Int = 32768
+    ) {
+        self.hiddenSize = hiddenSize
+        self.hiddenLayers = hiddenLayers
+        self.intermediateSize = intermediateSize
+        self.attentionHeads = attentionHeads
+        self.rmsNormEps = rmsNormEps
+        self.vocabularySize = vocabularySize
+        self.kvHeads = kvHeads
+        self.headDim = headDim
+        self.ropeTheta = ropeTheta
+        self.ropeScaling = ropeScaling
+        self.tieWordEmbeddings = tieWordEmbeddings
+        self.maxPositionEmbeddings = maxPositionEmbeddings
     }
 
     public init(from decoder: Decoder) throws {

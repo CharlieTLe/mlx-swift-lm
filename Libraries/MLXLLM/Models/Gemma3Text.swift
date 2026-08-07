@@ -325,6 +325,15 @@ public class Gemma3Model: Module {
     )
         -> MLXArray
     {
+        forward(inputs, mask: mask, cache: cache, collectHiddenStates: false).hidden
+    }
+
+    /// The layer loop, optionally reporting the residual stream at every boundary.
+    /// See `collectHiddenStatesKey` for the retention cost of collecting.
+    func forward(
+        _ inputs: MLXArray, mask: MLXFast.ScaledDotProductAttentionMaskMode? = nil,
+        cache: [KVCache?]? = nil, collectHiddenStates: Bool
+    ) -> (hidden: MLXArray, hiddenStates: [MLXArray]?) {
         var h: MLXArray
         h = embedTokens(inputs)
         let scale = MLXArray(sqrt(Float(config.hiddenSize)), dtype: .bfloat16)
@@ -342,12 +351,18 @@ public class Gemma3Model: Module {
                 MLXFast.ScaledDotProductAttentionMaskMode.none
             }
 
+        // Index 0 is the post-scale embedding output, so a caller reading this does
+        // not have to know about Gemma's bfloat16 sqrt(hiddenSize) factor.
+        var states: [MLXArray]? = collectHiddenStates ? [h] : nil
+        states?.reserveCapacity(layers.count + 1)
+
         for (i, layer) in layers.enumerated() {
             let isGlobal = (i % config.slidingWindowPattern == config.slidingWindowPattern - 1)
             let mask = isGlobal ? globalMask : slidingWindowMask
             h = layer(h, mask: mask, cache: layerCache?[i])
+            states?.append(h)
         }
-        return norm(h)
+        return (norm(h), states)
     }
 }
 
@@ -370,6 +385,22 @@ public class Gemma3TextModel: Module, LLMModel {
         var out = model(inputs, mask: nil, cache: cache)
         out = lmHead(out)
         return out
+    }
+
+    /// State-aware entry point. See `collectHiddenStatesKey`.
+    public func callAsFunction(
+        _ input: LMInput.Text, cache: [KVCache]?, state: LMOutput.State?
+    ) -> LMOutput {
+        guard state?.collectsHiddenStates == true else {
+            return LMOutput(logits: callAsFunction(input.tokens, cache: cache))
+        }
+
+        let (out, hiddenStates) = model.forward(
+            input.tokens, mask: nil, cache: cache, collectHiddenStates: true)
+
+        var outputState = LMOutput.State()
+        outputState[hiddenStatesKey] = hiddenStates
+        return LMOutput(logits: lmHead(out), state: outputState)
     }
 
     public func sanitize(weights: [String: MLXArray])

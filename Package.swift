@@ -35,6 +35,9 @@ let package = Package(
             name: "MLXGuidedGeneration",
             targets: ["MLXGuidedGeneration"]),
         .library(
+            name: "MLXInterpret",
+            targets: ["MLXInterpret"]),
+        .library(
             name: "BenchmarkHelpers",
             targets: ["BenchmarkHelpers"]),
         .library(
@@ -309,6 +312,35 @@ let package = Package(
             // path (see goldensDirectory in the test sources), not bundled, so
             // the Fixtures tree is excluded from the build graph.
             exclude: ["Fixtures"]
+        ),
+        // Mechanistic-interpretability tooling: logit lens, Jacobian lens,
+        // sparse decomposition, and activation patching. Built entirely against
+        // MLXLMCommon's `ResidualStreamAccess` protocol, so it deliberately does
+        // NOT depend on MLXLLM — architectures opt in by conforming, and this
+        // target never needs to know which ones exist.
+        .target(
+            name: "MLXInterpret",
+            dependencies: [
+                "MLXLMCommon",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+            ],
+            path: "Libraries/MLXInterpret",
+            exclude: ["README.md"]
+        ),
+        // Offline: tiny random-weight models, no network and no checkpoints.
+        // MLXLLM is linked to get concrete `ResidualStreamAccess` conformances
+        // to test against.
+        .testTarget(
+            name: "MLXInterpretTests",
+            dependencies: [
+                "MLXInterpret",
+                "MLXLMCommon",
+                "MLXLLM",
+                .product(name: "MLX", package: "mlx-swift"),
+                .product(name: "MLXNN", package: "mlx-swift"),
+            ],
+            path: "Tests/MLXInterpretTests"
         ),
     ],
     cxxLanguageStandard: .cxx17

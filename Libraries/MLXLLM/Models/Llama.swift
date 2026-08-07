@@ -137,15 +137,31 @@ public class LlamaModelInner: Module {
     }
 
     func callAsFunction(_ inputs: MLXArray, cache: [KVCache]? = nil) -> MLXArray {
+        forward(inputs, cache: cache, collectHiddenStates: false).hidden
+    }
+
+    /// The layer loop, optionally reporting the residual stream at every boundary.
+    ///
+    /// Separate from `callAsFunction` rather than an overload of it, so existing
+    /// call sites stay unambiguous. Collecting adds no arithmetic — each entry is an
+    /// activation this loop computes anyway — but see `collectHiddenStatesKey` for
+    /// the retention cost.
+    func forward(
+        _ inputs: MLXArray, cache: [KVCache]? = nil, collectHiddenStates: Bool
+    ) -> (hidden: MLXArray, hiddenStates: [MLXArray]?) {
         var h = embedTokens(inputs)
 
         let mask = createAttentionMask(h: h, cache: cache?.first)
 
+        var states: [MLXArray]? = collectHiddenStates ? [h] : nil
+        states?.reserveCapacity(layers.count + 1)
+
         for (i, layer) in layers.enumerated() {
             h = layer(h, mask: mask, cache: cache?[i])
+            states?.append(h)
         }
 
-        return norm(h)
+        return (norm(h), states)
     }
 }
 
@@ -178,6 +194,27 @@ public class LlamaModel: Module, LLMModel, KVCacheDimensionProvider {
         } else {
             return model.embedTokens.asLinear(out)
         }
+    }
+
+    /// State-aware entry point, so a caller can ask for the residual stream via
+    /// `collectHiddenStatesKey` and read it back on `hiddenStatesKey`.
+    ///
+    /// Overrides the default `LanguageModel` bridge, which discards state. Callers
+    /// that do not opt in take the same path as before and get `state == nil`.
+    public func callAsFunction(
+        _ input: LMInput.Text, cache: [KVCache]?, state: LMOutput.State?
+    ) -> LMOutput {
+        guard state?.collectsHiddenStates == true else {
+            return LMOutput(logits: callAsFunction(input.tokens, cache: cache))
+        }
+
+        let (out, hiddenStates) = model.forward(
+            input.tokens, cache: cache, collectHiddenStates: true)
+        let logits = lmHead.map { $0(out) } ?? model.embedTokens.asLinear(out)
+
+        var outputState = LMOutput.State()
+        outputState[hiddenStatesKey] = hiddenStates
+        return LMOutput(logits: logits, state: outputState)
     }
 
     public func sanitize(weights: [String: MLXArray]) -> [String: MLXArray] {
