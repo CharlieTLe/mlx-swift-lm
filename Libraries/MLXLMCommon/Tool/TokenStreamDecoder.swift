@@ -5,6 +5,9 @@ package enum TokenStreamEvent: Sendable, Equatable {
     case reasoning(String)
     case response(String)
     case toolCall(ToolCall)
+    /// A framed protocol rejected malformed output. Public generation logs it;
+    /// package-level consumers can observe it and decide whether to retry.
+    case protocolError(String)
     case stop
 }
 

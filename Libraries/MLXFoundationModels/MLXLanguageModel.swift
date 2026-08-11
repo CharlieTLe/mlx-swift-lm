@@ -895,6 +895,8 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
         /// a catchable Swift error.
         private static let logger = Logger(
             subsystem: "com.apple.FoundationModels-MLX", category: "Prewarm")
+        private static let protocolLogger = Logger(
+            subsystem: "com.apple.FoundationModels-MLX", category: "TokenStreamProtocol")
 
         /// Prewarms the model: loads weights and pre-compiles Metal shaders so
         /// the first `respond()` pays no cold-start shader-JIT cost.
@@ -1604,6 +1606,7 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
             case .reasoning(let text): reasoningText += text
             case .response(let text): result.responseText += text
             case .toolCall(let call): result.toolCalls.append(call)
+            case .protocolError(let message): Self.protocolLogger.error("\(message)")
             case .stop: return false
             }
             return true
@@ -1879,6 +1882,8 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
                                 case .reasoning(let text): segments.append(.reasoning(text))
                                 case .response(let text): segments.append(.response(text))
                                 case .toolCall: break
+                                case .protocolError(let message):
+                                    Self.protocolLogger.error("\(message)")
                                 case .stop: shouldContinue = false
                                 }
                                 return shouldContinue
@@ -1930,6 +1935,8 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
                     case .reasoning(let text): segments.append(.reasoning(text))
                     case .response(let text): segments.append(.response(text))
                     case .toolCall, .stop: break
+                    case .protocolError(let message):
+                        Self.protocolLogger.error("\(message)")
                     }
                     return true
                 }
