@@ -952,17 +952,8 @@ public final class ChatSession {
                         let containsNewMedia = pendingMessages.contains {
                             !$0.images.isEmpty || !$0.videos.isEmpty || !$0.audios.isEmpty
                         }
-                        let structuredToolCallCount = templateMessages.reduce(into: 0) {
-                            count, message in
-                            // GPT-OSS renders at most one call from each
-                            // assistant message. Other protocols ignore this
-                            // model-specific boundary count.
-                            if message.role == .assistant,
-                                message.tool?.calls?.isEmpty == false
-                            {
-                                count += 1
-                            }
-                        }
+                        let structuredToolCallCount = modelConfiguration.toolCallFormat?
+                            .promptCacheStructuredToolCallCount(in: templateMessages)
 
                         let userInput = UserInput(
                             chat: templateMessages,
@@ -1329,7 +1320,10 @@ public final class ChatSession {
                             }
                             for toolCall in pendingToolCalls {
                                 let toolResult = try await toolDispatch(toolCall)
-                                pendingMessages.append(.tool(toolResult, id: toolCall.id))
+                                pendingMessages.append(
+                                    .tool(
+                                        toolResult, id: toolCall.id,
+                                        name: toolCall.function.name))
                             }
                             continue restart
                         }
