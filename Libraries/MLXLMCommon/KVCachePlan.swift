@@ -195,6 +195,18 @@ package final class KVCacheStorage {
         return trimmed
     }
 
+    /// Rewind a speculative tail across mixed attention and recurrent caches.
+    @discardableResult
+    package func rewindSpeculative(_ count: Int) -> Int {
+        precondition(count >= 0, "Rewind count cannot be negative")
+        let rewound = rewindSpeculativePromptCache(cache, numTokens: count)
+        precondition(
+            rewound <= processedTokenCount,
+            "Cache rewound beyond its processed-token timeline")
+        processedTokenCount -= rewound
+        return rewound
+    }
+
     /// Open a staged round over these entries, or `nil` when one of them cannot take part.
     ///
     /// Every leaf is classified before anything is constructed, so a refusal leaves the entries
