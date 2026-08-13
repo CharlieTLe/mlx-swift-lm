@@ -125,6 +125,7 @@ public struct MTPSpeculativeTokenIterator: TokenIteratorProtocol {
         self.mainCacheStorage = KVCacheStorage(mainCache, plan: kvCachePlan)
 
         self.sampler = parameters.sampler()
+        try components.validate(parameters: parameters)
         self.processor = components.logitProcessor(parameters: parameters)
 
         self.maxTokens = parameters.maxTokens
