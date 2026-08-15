@@ -1617,6 +1617,22 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
             return true
         }
 
+        /// Reports a rejected tool call seen on the plain/reasoning streaming path.
+        ///
+        /// That path builds its decoder with `tools: nil`, so a rejection there is a
+        /// protocol anomaly rather than a call the caller could have executed. The
+        /// allowed-tool path treats a rejection as significant and throws
+        /// ``RejectedToolCallError``, but the decoder closures on this path are
+        /// non-throwing, so route the event to the same log channel as
+        /// `.protocolError` instead of dropping it silently. `rawTextPreview` is
+        /// deliberately never logged: it can carry raw model output and argument
+        /// values.
+        private static func logRejectedToolCall(_ rejection: RejectedToolCall) {
+            let toolName = rejection.toolName ?? "<unknown>"
+            protocolLogger.error(
+                "rejected tool call: reason=\(rejection.reason.rawValue) tool=\(toolName)")
+        }
+
         private func consumeAllowedEvents(
             _ events: [AllowedToolOutputRouter.Event],
             result: inout AllowedToolGenerationResult
@@ -1891,6 +1907,8 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
                                 case .reasoning(let text): segments.append(.reasoning(text))
                                 case .response(let text): segments.append(.response(text))
                                 case .toolCall: break
+                                case .rejectedToolCall(let rejection):
+                                    Self.logRejectedToolCall(rejection)
                                 case .protocolError(let message):
                                     Self.protocolLogger.error("\(message)")
                                 case .stop: shouldContinue = false
@@ -1944,6 +1962,8 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
                     case .reasoning(let text): segments.append(.reasoning(text))
                     case .response(let text): segments.append(.response(text))
                     case .toolCall, .stop: break
+                    case .rejectedToolCall(let rejection):
+                        Self.logRejectedToolCall(rejection)
                     case .protocolError(let message):
                         Self.protocolLogger.error("\(message)")
                     }
