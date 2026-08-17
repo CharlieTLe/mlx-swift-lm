@@ -1,0 +1,8 @@
+.build/
+
+# The root .gitignore drops Package.resolved. This package pins its remote
+# dependencies with `from:` ranges and the parent pins mlx-swift with
+# `.upToNextMinor`, so without the lockfile two builds of the same tag can
+# resolve different versions. The Homebrew formula builds from source, which
+# makes the user's resolution the release: it has to be pinned.
+!Package.resolved

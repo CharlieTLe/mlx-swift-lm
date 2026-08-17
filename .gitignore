@@ -95,10 +95,15 @@ iOSInjectionProject/
 .idea
 .vscode
 
+# Claude Code scratch state (worktrees, session files)
+.claude/
+
 # Local Python tooling for fixture regeneration (uv-managed)
 .python-version
 .venv/
 pyproject.toml
 uv.lock
 main.py
+__pycache__/
+*.pyc
 
