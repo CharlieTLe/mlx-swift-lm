@@ -16,16 +16,20 @@ summary of the scene so far.
 
 ```bash
 brew tap CharlieTLe/tap
+brew trust CharlieTLe/tap
 brew install shakespeare-reader
 shakespeare-reader &
 ```
 
+The `brew trust` step is not optional: recent Homebrew refuses to load a formula from
+a third-party tap until you trust it, and `brew tap` does not say so.
+
 There is no `.app` bundle, so the command launches the window and holds the terminal
 until you quit it; `&` gives the shell back.
 
-The formula builds from source and the source includes MLX, so this is a long build
-(tens of minutes, several GB of scratch under Homebrew's cache) rather than a
-download. It needs:
+The formula builds from source and the source includes MLX, so this is a compile rather
+than a download: about two minutes and 1.6 GB of scratch on an M4 Max, longer on fewer
+cores or on a first build, which also clones fourteen packages. It needs:
 
 - **Apple silicon.** MLX has no Intel path.
 - **A full Xcode**, selected with `xcode-select`, with the **Metal toolchain**
