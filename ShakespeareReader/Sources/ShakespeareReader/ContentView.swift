@@ -72,6 +72,22 @@ struct ContentView: View {
             if let corpus, let sceneKey, let scene = corpus.scene(sceneKey),
                 let play = corpus.play(sceneKey.playID)
             {
+                // The side panes are fixed widths, and that is what keeps the navigator
+                // still. `HSplitView` distributes width from each child's min / ideal /
+                // max, and it will move *any* pane that has room between them: a `maxWidth`
+                // caps how far a pane can grow but leaves it just as free to be shrunk. So
+                // a navigator declared 180…320 gets squeezed whenever the split view is
+                // over-subscribed, and it is over-subscribed exactly when the middle pane's
+                // reported ideal grows — which happens on every scene change, since
+                // `SceneReaderView` is a fresh identity per scene whose heading is as wide
+                // as the setting string. Pinning the sides leaves the reader as the only
+                // pane with any give, so it absorbs the whole difference and the dividers
+                // never move. Giving either side a width *range* hands that pane back to
+                // the split view and the drift returns.
+                //
+                // The cost is that the dividers are no longer draggable. 210 + 380 here
+                // plus the reader's 420 floor is the 1010 that sets the window minimum in
+                // `ShakespeareReaderApp`.
                 HSplitView {
                     if showsNavigator {
                         NavigatorView(
@@ -80,7 +96,7 @@ struct ContentView: View {
                                 get: { sceneKey }, set: { openScene($0, in: corpus) }),
                             collapsed: $collapsedActs
                         )
-                        .frame(minWidth: 180, idealWidth: 210)
+                        .frame(width: 210)
                     }
 
                     SceneReaderView(
@@ -97,7 +113,12 @@ struct ContentView: View {
                             regenerate(play: play, key: sceneKey, scene: scene)
                         }
                     )
-                    .frame(minWidth: 420)
+                    // The only pane with any flexibility, so every width change lands
+                    // here. The explicit `idealWidth` keeps the scene heading from
+                    // proposing the window's preferred width: without one this frame
+                    // propagates the child's own ideal, which is the full single-line
+                    // width of whichever setting string happens to be on screen.
+                    .frame(minWidth: 420, idealWidth: 640, maxWidth: .infinity)
                     .environment(\.readerTypeface, fonts.typeface(for: readerFont))
 
                     if showsCommentary {
@@ -118,7 +139,7 @@ struct ContentView: View {
                                 statusStrip
                             }
                         }
-                        .frame(minWidth: 320, idealWidth: 380)
+                        .frame(width: 380)
                     }
                 }
             } else if let corpusError {

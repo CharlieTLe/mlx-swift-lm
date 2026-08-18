@@ -138,7 +138,11 @@ struct ShakespeareReaderApp: App {
     var body: some SwiftUI.Scene {
         WindowGroup("Shakespeare Reader") {
             ContentView(options: Self.options)
-                .frame(minWidth: 1000, minHeight: 640)
+                // The three panes need 210 + 420 + 380 = 1010 with all of them open, so
+                // the floor has to clear that or the reader gets pushed under its own
+                // minimum. AppKit clamps an autosaved frame up to a raised minimum on the
+                // next launch, so a window left narrower than this widens once and holds.
+                .frame(minWidth: 1080, minHeight: 640)
         }
     }
 }
