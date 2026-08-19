@@ -12,6 +12,15 @@ around. This collapses the loop — select the lines, and the app gathers the
 surrounding context itself: act, scene, setting, who is on stage, the run-up lines, a
 summary of the scene so far.
 
+![Hamlet I.iv open in the reader. A speech is double-clicked and the commentary pane
+streams a gloss of it, then four follow-up questions. The arrow keys move and extend
+the selection, each move re-glossing, until the selection rolls off the end of the
+scene into I.v. There the Ghost's speech is glossed, a question is typed into the Ask
+Anything field, and the answer streams in under it.](docs/demo.gif)
+
+25 seconds, real time, no cuts: everything after each selection is the model running
+on-device.
+
 ## Install
 
 ```bash
