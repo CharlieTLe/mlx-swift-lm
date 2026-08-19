@@ -266,6 +266,52 @@ enum SelfTest {
         log.equal(
             LineSelection.speech(at: 42, in: scene).range, 42...42,
             "a double-click on an out-of-range index")
+
+        // Arrow moves. Nothing selected *lands* rather than steps, whichever way it was
+        // pressed: the navigator clears the selection on every scene change, so stepping
+        // from an implied head of 0 skipped line one of every scene.
+        func moved(_ from: LineSelection?, _ step: Int, extending: Bool = false)
+            -> LineSelection?
+        {
+            LineSelection.moved(from: from, by: step, extending: extending, in: lines)
+        }
+
+        log.equal(moved(nil, 1), LineSelection(at: 0), "the first press down")
+        log.equal(moved(nil, -1), LineSelection(at: 0), "the first press up")
+        log.equal(
+            moved(nil, 1, extending: true), LineSelection(at: 0),
+            "shift-down with no anchor to keep")
+        log.equal(moved(LineSelection(at: 2), 1), LineSelection(at: 3), "stepping down")
+        log.equal(moved(LineSelection(at: 2), -1), LineSelection(at: 1), "stepping up")
+
+        // A collapsed selection moves as a whole rather than shrinking.
+        log.equal(
+            moved(LineSelection(anchor: 1, head: 4), 1), LineSelection(at: 5),
+            "an unshifted step out of a range")
+
+        // Off the edge with nothing to extend: the caller's cue to roll scenes.
+        log.equal(moved(LineSelection(at: 6), 1), nil, "down at the last line")
+        log.equal(moved(LineSelection(at: 0), -1), nil, "up at line 0")
+
+        // Extending never rolls — a selection is scene-scoped, so it stops at the edge.
+        log.equal(
+            moved(LineSelection(at: 6), 1, extending: true), LineSelection(at: 6),
+            "shift-down at the last line")
+        log.equal(
+            moved(LineSelection(at: 0), -1, extending: true), LineSelection(at: 0),
+            "shift-up at line 0")
+        log.equal(
+            moved(LineSelection(anchor: 4, head: 3), -1, extending: true),
+            LineSelection(anchor: 4, head: 2),
+            "shift-up back through the anchor keeps it")
+
+        log.equal(
+            LineSelection.moved(from: nil, by: 1, extending: false, in: []), nil,
+            "an arrow move in an empty scene")
+        log.equal(
+            LineSelection.moved(
+                from: LineSelection(at: 0), by: 1, extending: false, in: []),
+            nil, "an arrow move in an empty scene with a stale selection")
     }
 
     private static func speech(

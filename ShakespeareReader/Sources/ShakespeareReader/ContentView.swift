@@ -109,9 +109,8 @@ struct ContentView: View {
                                 revealingCommentary: origin == .pointer)
                         },
                         onCancel: { cancel() },
-                        onRegenerate: {
-                            regenerate(play: play, key: sceneKey, scene: scene)
-                        }
+                        onRegenerate: { regenerate() },
+                        onStepScene: { step in stepScene(step, in: corpus) }
                     )
                     // The only pane with any flexibility, so every width change lands
                     // here. The explicit `idealWidth` keeps the scene heading from
@@ -180,8 +179,8 @@ struct ContentView: View {
                 showsNavigator.toggle()
             }
 
-            Text("Shakespeare Reader")
-                .font(.headline)
+            typefaceMenu
+
             if showsDiagnostics {
                 Text("\(shortModelName) · on-device")
                     .font(.caption)
@@ -227,7 +226,6 @@ struct ContentView: View {
                     .help(message)
             }
 
-            typefaceMenu
             diagnosticsMenu
 
             paneToggle(
@@ -530,6 +528,33 @@ struct ContentView: View {
         }
     }
 
+    /// An arrow key that ran off the edge of a scene: `+1` opens the next scene on its
+    /// first line, `-1` the previous one on its last.
+    ///
+    /// Scoped to the current play. `sceneKeys` is flat across the whole corpus, and
+    /// running off the end of Hamlet into another play is a bigger jump than an arrow
+    /// key should make, so both ends of the play just stop.
+    ///
+    /// Arriving this way generates nothing, exactly as opening the scene from the
+    /// navigator does not: the annotation is cleared and the synopsis prewarms, and
+    /// clicking the line or ⌘R glosses it. Committing on arrival would mean duplicating
+    /// `SceneReaderView`'s 350 ms debounce here, and the reader has already left the line
+    /// that scheduled it.
+    private func stepScene(_ step: Int, in corpus: Corpus) {
+        guard let sceneKey else { return }
+        let keys = corpus.sceneKeys.filter { $0.playID == sceneKey.playID }
+        guard let at = keys.firstIndex(of: sceneKey) else { return }
+        let next = at + step
+        guard keys.indices.contains(next), let scene = corpus.scene(keys[next]) else {
+            return
+        }
+
+        openScene(keys[next], in: corpus)
+        // After `openScene`, which nils it: the edge line being arrowed onto.
+        guard !scene.lines.isEmpty else { return }
+        selection = LineSelection(at: step > 0 ? 0 : scene.lines.count - 1)
+    }
+
     // MARK: - Panes
 
     /// Hiding the commentary hides the status strip with it, so anything running
@@ -606,9 +631,17 @@ struct ContentView: View {
         start(built, ignoringCache: ignoringCache)
     }
 
-    private func regenerate(play: Play, key: SceneKey, scene: Scene) {
-        guard let selection else { return }
-        commit(selection, play: play, key: key, scene: scene, ignoringCache: true)
+    /// ⌘R. Resolves the scene from state at the moment it runs rather than closing over
+    /// the values this body was built with, because the shortcut hangs off a hidden
+    /// `Button` inside `SceneReaderView`'s `.background`, and that button keeps the
+    /// action it was created with: reached through a captured `play`/`key`/`scene`, ⌘R
+    /// regenerated whichever scene the app opened on for the rest of the session. Reading
+    /// `@State` through a stale copy of this struct is safe — the storage is shared.
+    private func regenerate() {
+        guard let corpus, let sceneKey, let selection,
+            let play = corpus.play(sceneKey.playID), let scene = corpus.scene(sceneKey)
+        else { return }
+        commit(selection, play: play, key: sceneKey, scene: scene, ignoringCache: true)
     }
 
     private func start(_ built: PassageContext, ignoringCache: Bool) {
@@ -655,7 +688,13 @@ struct ContentView: View {
         }
     }
 
+    /// Guarded here and not only by the pane's `.disabled`, because a Return keypress
+    /// can race a phase change, and `AnnotationService` overwrites its active task per
+    /// call rather than serializing — a second ask in flight would strand the first.
     private func ask(_ question: String) {
+        let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, !isBusy, context != nil else { return }
+
         let index = transcript.count
         transcript.append(.init(question: question, answer: ""))
         followUps = []

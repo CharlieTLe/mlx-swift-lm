@@ -29,6 +29,11 @@ struct SceneReaderView: View {
     let onCancel: () -> Void
     let onRegenerate: () -> Void
 
+    /// Rolls into the neighbouring scene when an arrow key runs off the edge of this one:
+    /// `+1` forward, `-1` back. Stops at the ends of the play, since crossing into another
+    /// is the navigator's job.
+    let onStepScene: (Int) -> Void
+
     private static let space = "reader"
     private static let commitDelay = Duration.milliseconds(350)
 
@@ -36,6 +41,11 @@ struct SceneReaderView: View {
     @State private var isDragging = false
     @State private var commitTask: Task<Void, Never>?
     @FocusState private var isFocused: Bool
+
+    /// The line an arrow move wants on screen, written by `move(_:)` and read back
+    /// inside the `ScrollViewReader`, which is the only place a `ScrollViewProxy`
+    /// exists. Cleared as each scene appears, since this view now outlives them.
+    @State private var scrollTarget: Int?
 
     /// The face the play is set in. Injected here by `ContentView` and read by this
     /// view and `LineRow`; nothing outside the reader pane sees it.
@@ -58,8 +68,14 @@ struct SceneReaderView: View {
                 }
                 .coordinateSpace(name: Self.space)
                 .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
-                .onMoveCommand { direction in
-                    move(direction, scroller: scroller)
+                .onChange(of: scrollTarget) {
+                    // Where an arrow move lands. Scrolling can only happen in here,
+                    // with the proxy, while `.onMoveCommand` has to sit on the
+                    // focusable view itself — see the note beside it below. So the
+                    // move writes a line index and this puts it on screen.
+                    if let scrollTarget {
+                        scroller.scrollTo(scrollTarget, anchor: .center)
+                    }
                 }
                 .onChange(of: typeface) {
                     // `.id(key)` does not change on a font switch, which is right —
@@ -70,25 +86,50 @@ struct SceneReaderView: View {
                     scroller.scrollTo(selection?.head ?? 0, anchor: .center)
                 }
                 .onAppear {
-                    // `.id(key)` just rebuilt this view at the top of the scene. A
-                    // selection already set on first appearance was restored from the
-                    // last session, since the navigator clears it on every scene
-                    // change, so put it back on screen. `scrollTo` reaches a row that
-                    // the `LazyVStack` has not materialized, because `ForEach` over
-                    // the enumerated lines declares every id up front.
+                    // This subtree was just rebuilt at the top of the scene. A
+                    // selection already set on first appearance was either restored
+                    // from the last session or is the edge line an arrow rolled onto,
+                    // so put it back on screen. `scrollTo` reaches a row that the
+                    // `LazyVStack` has not materialized, because `ForEach` over the
+                    // enumerated lines declares every id up front.
+                    //
+                    // `scrollTarget` outlives the scene now that the identity below is
+                    // the scroll view's rather than the whole pane's; clearing it keeps
+                    // a move onto the same index as the last scene's from being read as
+                    // "no change" and skipping its scroll.
+                    scrollTarget = nil
                     if let head = selection?.head {
                         scroller.scrollTo(head, anchor: .center)
                     }
                 }
+                // A fresh scroll view per scene: resets the scroll position to the top
+                // without needing macOS 15's `ScrollPosition`.
+                //
+                // Here, and **not** on the whole pane, which took the `.focusable()`
+                // responder below down with it on every scene change: an arrow-key roll
+                // then landed in the next scene with `isFocused` still reading true —
+                // the band even stayed accent — and every key dead, arrows and Esc
+                // alike, until the reader clicked a line.
+                .id(key)
             }
         }
-        // A fresh view per scene: resets the scroll position to the top without
-        // needing macOS 15's `ScrollPosition`.
-        .id(key)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
         .onAppear { isFocused = true }
+        .onChange(of: key) {
+            // This view now outlives the scene, so a commit scheduled for the line the
+            // reader is leaving would land in a pane `ContentView` has just cleared for
+            // the new one. The roll cancels it in `move(_:)` for the same reason; this
+            // covers the navigator.
+            commitTask?.cancel()
+        }
+        // Beside `.focusable()` and **not** on the `ScrollView` inside, where it used to
+        // be and never fired: a command handler is offered to the focused view and then
+        // to its ancestors, never to its descendants, so the arrows were dead even with
+        // the pane focused while `.onExitCommand` here worked. Hence `scrollTarget`
+        // rather than the proxy, which only exists inside the `ScrollViewReader`.
+        .onMoveCommand { move($0) }
         .onExitCommand {
             commitTask?.cancel()
             selection = nil
@@ -116,7 +157,8 @@ struct SceneReaderView: View {
             line: line,
             display: line.speaker.map(cast.display),
             isSelected: selection?.contains(index) ?? false,
-            isFirstSelected: selection?.range.lowerBound == index
+            isFirstSelected: selection?.range.lowerBound == index,
+            hasFocus: isFocused
         )
         .reportRowFrame(index: index, space: Self.space)
         // The `count: 2` gesture must be attached *before* the `count: 1` gesture
@@ -145,6 +187,11 @@ struct SceneReaderView: View {
                     if !isDragging {
                         isDragging = true
                         selection = LineSelection(at: index)
+                        // Same reason as `select(_:)`: the pane has to hold the
+                        // keyboard for the arrows to keep working after a drag.
+                        // Inside the guard, because `onChanged` runs per event and
+                        // focus is not worth re-requesting at frame rate.
+                        isFocused = true
                     }
                     let head = rowFrames.line(at: value.location) ?? index
                     selection?.extend(to: head)
@@ -178,6 +225,16 @@ struct SceneReaderView: View {
 
     private func select(_ new: LineSelection) {
         selection = new
+        // Clicking in the reader is what hands the keyboard back to it. A tap gesture
+        // is not an `NSControl`, so it never moves first responder on its own: after a
+        // click in the navigator's `List` the sidebar keeps it, and the arrows, Esc,
+        // ⌘C and ⌘R here are all dead until something takes it back. `.onAppear` fires
+        // once, outside `.id(key)`, so it cannot be that something.
+        //
+        // `isFocused` reads stale inside this closure — the write resolves on commit —
+        // so nothing here may branch on it. Setting it beside `selection` is not a
+        // hazard: both land in the one transaction.
+        isFocused = true
         scheduleCommit(new, from: .pointer)
     }
 
@@ -192,7 +249,7 @@ struct SceneReaderView: View {
         }
     }
 
-    private func move(_ direction: MoveCommandDirection, scroller: ScrollViewProxy) {
+    private func move(_ direction: MoveCommandDirection) {
         let step: Int
         switch direction {
         case .up: step = -1
@@ -200,16 +257,24 @@ struct SceneReaderView: View {
         default: return
         }
 
+        // Read the modifiers from the event for the same reason the click path does at
+        // `row(index:line:)`: SwiftUI does not report them on a move command.
         let extending = NSEvent.modifierFlags.contains(.shift)
-        var next = selection ?? LineSelection(at: 0)
-        let target = min(max(0, next.head + step), scene.lines.count - 1)
-        if extending {
-            next.extend(to: target)
-        } else {
-            next = LineSelection(at: target)
+        guard
+            let next = LineSelection.moved(
+                from: selection, by: step, extending: extending, in: scene.lines)
+        else {
+            // Off the edge of the scene, with nothing to extend: roll into the next one.
+            // Cancelling first matters — `.id(key)` replaces this subtree on a roll, and
+            // a commit already scheduled for the line being left would land in a pane
+            // `ContentView` has just cleared for the new scene.
+            commitTask?.cancel()
+            onStepScene(step)
+            return
         }
+
         selection = next
-        scroller.scrollTo(target, anchor: .center)
+        scrollTarget = next.head
         scheduleCommit(next, from: .keyboard)
     }
 

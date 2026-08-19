@@ -79,6 +79,35 @@ struct LineSelection: Equatable, Sendable, Codable {
         head = index
     }
 
+    /// Where an arrow key moves a selection: one line in `step`'s direction, extending
+    /// from the anchor when shift is held.
+    ///
+    /// `nil` means there is no line that way in this scene, which is the caller's cue to
+    /// roll into the neighbouring one. Extending never returns `nil`: a selection is
+    /// scene-scoped by design, so shift-arrow stops at the edge rather than crossing.
+    /// With nothing selected the first press *lands* rather than steps, on the opening
+    /// line whichever way it was pressed — stepping from an implied head of 0 made ↓ skip
+    /// line one of every scene, since the navigator clears the selection on every change.
+    static func moved(
+        from current: LineSelection?, by step: Int, extending: Bool, in lines: [Line]
+    ) -> LineSelection? {
+        guard !lines.isEmpty else { return nil }
+        let upper = lines.count - 1
+        guard let current else { return LineSelection(at: 0) }
+
+        let target = current.head + step
+        guard lines.indices.contains(target) else {
+            guard extending else { return nil }
+            var stopped = current
+            stopped.extend(to: min(max(0, target), upper))
+            return stopped
+        }
+        guard extending else { return LineSelection(at: target) }
+        var extended = current
+        extended.extend(to: target)
+        return extended
+    }
+
     /// Clamps into a scene, so a stale selection can never index out of bounds
     /// after the reader switches scenes.
     func clamped(to lines: [Line]) -> LineSelection? {

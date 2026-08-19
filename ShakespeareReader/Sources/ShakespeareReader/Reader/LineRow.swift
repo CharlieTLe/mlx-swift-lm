@@ -8,8 +8,8 @@ import SwiftUI
 /// layout; anything that makes height depend on selection closes that loop.
 ///
 /// Changing the typeface resizes every row and so is *not* that loop: `rowFrames` is
-/// written from a preference and read **only** inside the drag gesture at
-/// `SceneReaderView.swift:132`, never in `body`, so a font change is a one-shot
+/// written from a preference and read **only** inside the drag gesture in
+/// `SceneReaderView.row(index:line:)`, never in `body`, so a font change is a one-shot
 /// relayout that settles. Selection is the thing that has to stay size-neutral,
 /// because `isSelected` *is* read during layout.
 @MainActor
@@ -19,6 +19,13 @@ struct LineRow: View {
     let display: String?
     let isSelected: Bool
     let isFirstSelected: Bool
+
+    /// Whether the reader pane holds the keyboard. Focus stays in the navigator when a
+    /// scene is picked there, so the band goes grey to say the arrows are pointed
+    /// somewhere else, the way an unfocused `NSTableView` does. Colour **only**: this is
+    /// read during layout just as `isSelected` is, so it is bound by the same
+    /// size-neutrality contract above.
+    let hasFocus: Bool
 
     @Environment(\.readerTypeface) private var typeface
 
@@ -58,14 +65,25 @@ struct LineRow: View {
         .background(alignment: .leading) {
             if isSelected {
                 ZStack(alignment: .leading) {
-                    Color.accentColor.opacity(0.14)
+                    Rectangle().fill(bandFill)
                     Rectangle()
-                        .fill(Color.accentColor)
+                        .fill(bandRule)
                         .frame(width: 2)
                 }
             }
         }
         .contentShape(Rectangle())
+    }
+
+    /// `AnyShapeStyle` because the two branches are different style types, which is the
+    /// house idiom (`ContentView.paneToggle`).
+    private var bandFill: AnyShapeStyle {
+        hasFocus
+            ? AnyShapeStyle(Color.accentColor.opacity(0.14)) : AnyShapeStyle(.quaternary)
+    }
+
+    private var bandRule: AnyShapeStyle {
+        hasFocus ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary)
     }
 
     private var numberLabel: String {

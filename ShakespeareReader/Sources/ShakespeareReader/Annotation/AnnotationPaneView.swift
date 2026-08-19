@@ -47,6 +47,18 @@ struct AnnotationPaneView: View {
     /// turn following off the instant they land.
     @State private var isJumping = false
 
+    /// The Ask Anything field's contents, and whether it holds the keyboard.
+    @State private var draft = ""
+    @FocusState private var isDraftFocused: Bool
+
+    /// Set from sending a typed question until the keyboard has been handed back to
+    /// the field. A reader who types one question usually has a second, so focus
+    /// stays in the field across the exchange — but the field is `.disabled` while
+    /// the answer runs and a disabled field cannot be first responder, so keeping the
+    /// keyboard means asking for it again when the answer lands rather than merely
+    /// declining to give it up.
+    @State private var wantsDraftFocus = false
+
     var body: some View {
         ScrollViewReader { scroller in
             ScrollView {
@@ -79,6 +91,11 @@ struct AnnotationPaneView: View {
                     // written. Keeping them in a fixed slot above the transcript put the
                     // next set of questions back where the reader tapped, above the
                     // answer they had just asked for.
+                    //
+                    // The Ask Anything field is the last of those rows, so it arrives
+                    // with the suggestions and goes away with them: asking clears them
+                    // for the duration of the answer, and the refresh turn brings the
+                    // whole block back under it.
                     if !followUps.isEmpty {
                         askRows
                     }
@@ -118,7 +135,23 @@ struct AnnotationPaneView: View {
                 // first, and fresh content should start at its beginning.
                 guard isEmpty else { return }
                 isArmed = false
+                // Whatever cleared the commentary took the reader somewhere else, so
+                // the field's claim on the keyboard is stale — a passage picked mid
+                // answer would otherwise have focus yanked out of the reader pane the
+                // moment its gloss finished.
+                wantsDraftFocus = false
                 jump { scroller.scrollTo(Self.contentID, anchor: .top) }
+            }
+            .onChange(of: isBusy) { _, busy in
+                // The refreshed rows are up and the field is live again: give it the
+                // keyboard back, so the follow-up can be typed without clicking into it
+                // first. `.followUps` is yielded before the closing `.phase(.idle)`, so
+                // by here the field is on screen — except when the refresh turn produced
+                // no new suggestions, which takes the whole block away and leaves
+                // nothing to focus.
+                guard !busy, wantsDraftFocus else { return }
+                wantsDraftFocus = false
+                isDraftFocused = !followUps.isEmpty
             }
         }
     }
@@ -240,7 +273,9 @@ struct AnnotationPaneView: View {
     }
 
     /// Full-width vertical rows with a chevron and dividers, which is what the
-    /// reference UI actually is — and it avoids needing a flow layout.
+    /// reference UI actually is — and it avoids needing a flow layout. The field for a
+    /// question of the reader's own is the last row, and comes and goes with the
+    /// suggestions above it.
     @ViewBuilder
     private var askRows: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -275,7 +310,56 @@ struct AnnotationPaneView: View {
                     Divider()
                 }
             }
+
+            // Closes the list off, so the field reads as its own thing rather than as
+            // another suggestion.
+            Divider()
+
+            HStack(spacing: 8) {
+                TextField("Ask Anything", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .focused($isDraftFocused)
+                    .onSubmit { submitDraft() }
+                    // Esc belongs to the field while it holds the keyboard: it
+                    // abandons the draft. It does not reach
+                    // `SceneReaderView.onExitCommand`, which would clear the selection
+                    // and wipe the pane the draft was written against — the pane is
+                    // that view's sibling, not its descendant, and commands only
+                    // travel to ancestors.
+                    .onExitCommand {
+                        draft = ""
+                        isDraftFocused = false
+                    }
+
+                if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button(action: submitDraft) {
+                        Image(systemName: "arrow.up.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(RoundedRectangle(cornerRadius: 7).fill(.quaternary.opacity(0.5)))
+            .padding(.top, 8)
+            .disabled(isBusy)
         }
+    }
+
+    private func submitDraft() {
+        let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        // Same as tapping a row: asking is the reader opting into being carried along
+        // with the answer.
+        isArmed = true
+        draft = ""
+        // The keyboard stays here, so one question can be followed by the next. The
+        // cost is that the reader pane's arrows, Esc, ⌘C and ⌘R are dead until focus
+        // leaves; clicking a line takes it back through `SceneReaderView.select(_:)`.
+        wantsDraftFocus = true
+        onAsk(question)
     }
 }
 

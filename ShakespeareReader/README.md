@@ -124,7 +124,11 @@ A cache hit costs **1 ms** and no model work at all.
   expose a selected character range, and a play is line-structured anyway — line
   numbers are what the context window, the cache key, and the citation are all built
   on. Click, shift-click to extend, double-click for the whole speech, drag, arrows,
-  Esc to clear, ⌘C to copy with the citation, ⌘R to regenerate.
+  Esc to clear, ⌘C to copy with the citation, ⌘R to regenerate. The arrows roll into the
+  adjacent scene of the same play at either edge of one, and shift-arrow stops at the
+  edge instead, since a selection is scene-scoped. Clicking a line is what hands the
+  keyboard back to the reader after the navigator has it — the selection band is grey
+  while the arrows are pointed somewhere else.
 - **Context is deterministic**, from the play's own structure: no embeddings, because
   the act/scene/speaker hierarchy is a better index here and it is exact.
 - **One scene at a time.** This bounds rows to ~600 (Hamlet II.ii is the worst case),
