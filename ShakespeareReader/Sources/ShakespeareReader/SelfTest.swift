@@ -72,11 +72,19 @@ enum SelfTest {
     /// 2 headings the transcription left on the same line as their first verse line
     /// (`ROMEO. Nurse, commend me…`, `THIRD WATCH. Here is a Friar…`), which are
     /// swallowed into the previous speaker's text if they are not recovered.
+    ///
+    /// `collectives` is only filled in for those three. It names speakers absent from
+    /// Dramatis Personæ, and picking them is a reading of the play rather than
+    /// something a count can produce, so the other 32 assert their shape and their
+    /// three totals and leave it at that. Two of those totals are worth more than
+    /// they look: As You Like It's 22 scenes and 25 personae, and The Winter's Tale's
+    /// 15 and 28, are what fail if the personae block runs on into the body again —
+    /// it used to swallow both plays whole, for 2,930 and 3,250 cast entries.
     private struct Expected {
         let acts: Int
         let scenes: Int
         let speechHeadings: Int
-        let collectives: [String]
+        var collectives: [String] = []
     }
 
     private static let expected: [String: Expected] = [
@@ -92,6 +100,45 @@ enum SelfTest {
         "romeo-and-juliet": Expected(
             acts: 5, scenes: 26, speechHeadings: 840,
             collectives: ["FIRST CITIZEN", "FIRST SERVANT", "FIRST WATCH", "THIRD WATCH"]),
+        "alls-well-that-ends-well": Expected(acts: 5, scenes: 23, speechHeadings: 936),
+        "antony-and-cleopatra": Expected(acts: 5, scenes: 42, speechHeadings: 1176),
+        "as-you-like-it": Expected(acts: 5, scenes: 22, speechHeadings: 812),
+        "comedy-of-errors": Expected(acts: 5, scenes: 11, speechHeadings: 609),
+        "coriolanus": Expected(acts: 5, scenes: 29, speechHeadings: 1104),
+        "cymbeline": Expected(acts: 5, scenes: 29, speechHeadings: 857),
+        "henry-iv-part-1": Expected(acts: 5, scenes: 19, speechHeadings: 775),
+        "henry-iv-part-2": Expected(acts: 5, scenes: 19, speechHeadings: 900),
+        // 27 scenes: 23 numbered plus the 4 Chorus blocks that open Acts II-V. Their
+        // headings are `CHORUS.`, which is why this play needs no special case where
+        // Troilus and Pericles are still unparsed.
+        "henry-v": Expected(acts: 5, scenes: 27, speechHeadings: 739),
+        "henry-vi-part-1": Expected(acts: 5, scenes: 27, speechHeadings: 644),
+        "henry-vi-part-2": Expected(acts: 5, scenes: 24, speechHeadings: 768),
+        "henry-vi-part-3": Expected(acts: 5, scenes: 28, speechHeadings: 782),
+        // 17 scenes: 16 numbered plus the Prologue, scene 0 of Act I.
+        "henry-viii": Expected(acts: 5, scenes: 17, speechHeadings: 709),
+        "julius-caesar": Expected(acts: 5, scenes: 18, speechHeadings: 795),
+        "king-john": Expected(acts: 5, scenes: 16, speechHeadings: 551),
+        "king-lear": Expected(acts: 5, scenes: 26, speechHeadings: 1066),
+        "loves-labours-lost": Expected(acts: 5, scenes: 9, speechHeadings: 1045),
+        "measure-for-measure": Expected(acts: 5, scenes: 17, speechHeadings: 897),
+        "merchant-of-venice": Expected(acts: 5, scenes: 20, speechHeadings: 634),
+        "merry-wives-of-windsor": Expected(acts: 5, scenes: 23, speechHeadings: 1017),
+        "midsummer-nights-dream": Expected(acts: 5, scenes: 9, speechHeadings: 489),
+        "much-ado-about-nothing": Expected(acts: 5, scenes: 13, speechHeadings: 977),
+        "othello": Expected(acts: 5, scenes: 15, speechHeadings: 1179),
+        "richard-ii": Expected(acts: 5, scenes: 19, speechHeadings: 554),
+        "richard-iii": Expected(acts: 5, scenes: 25, speechHeadings: 1078),
+        "taming-of-the-shrew": Expected(acts: 5, scenes: 12, speechHeadings: 817),
+        "tempest": Expected(acts: 5, scenes: 9, speechHeadings: 646),
+        "timon-of-athens": Expected(acts: 5, scenes: 18, speechHeadings: 802),
+        "titus-andronicus": Expected(acts: 5, scenes: 14, speechHeadings: 565),
+        // The play the trailing-period act header was added for: its body sets `ACT
+        // I.` where its Contents block sets `ACT I`, and it failed to parse at all
+        // until the pattern tolerated the period.
+        "twelfth-night": Expected(acts: 5, scenes: 18, speechHeadings: 922),
+        "two-gentlemen-of-verona": Expected(acts: 5, scenes: 20, speechHeadings: 858),
+        "winters-tale": Expected(acts: 5, scenes: 15, speechHeadings: 738),
     ]
 
     private static func corpus(_ log: Log) {
@@ -100,6 +147,15 @@ enum SelfTest {
             return
         }
         log.check(corpus.plays.count >= 2, "expected at least two plays")
+
+        // Every play `expected` describes is actually in the bundle. `CorpusLoader`
+        // enumerates the directory, so a JSON file that failed to generate or never
+        // got added leaves a corpus that loads, reads correctly, and is quietly short
+        // a play — and the per-play loop below cannot see what is not there.
+        let loaded = Set(corpus.plays.map(\.id))
+        for id in expected.keys.sorted() where !loaded.contains(id) {
+            log.fail("\(id).json is missing from the bundled corpus")
+        }
 
         for play in corpus.plays {
             log.equal(play.schemaVersion, 1, "\(play.id) schemaVersion")
@@ -140,16 +196,18 @@ enum SelfTest {
                 }
             }
 
+            // Proves the PG license footer was stripped: leave it in and `DAMAGE.`
+            // parses as a speaker. Checked for every play rather than only the ones
+            // with a heading count, since the footer is identical in all 35 files and
+            // this is the cheapest possible proof the body scan found its end.
+            log.check(
+                !speakers.contains("DAMAGE"),
+                "\(play.id) has DAMAGE as a speaker — the PG footer was not stripped")
+
             guard let target = expected[play.id] else { continue }
             log.equal(play.acts.count, target.acts, "\(play.id) acts")
             log.equal(scenes, target.scenes, "\(play.id) scenes")
             log.equal(headings, target.speechHeadings, "\(play.id) speech headings")
-
-            // Proves the PG license footer was stripped: leave it in and `DAMAGE.`
-            // parses as a speaker in all three plays.
-            log.check(
-                !speakers.contains("DAMAGE"),
-                "\(play.id) has DAMAGE as a speaker — the PG footer was not stripped")
 
             // Proves speakers are not gated on Dramatis Personæ, where none of
             // these appear.
@@ -825,8 +883,13 @@ enum SelfTest {
 
         // A play that is no longer in the corpus, and an act it never had: both would
         // leave `ContentView` on its loading spinner forever if handed through.
+        //
+        // The id is deliberately synthetic. This check used to name Coriolanus, which
+        // was a play the corpus did not have until it was one — at which point the
+        // record resolved, the fallback never fired, and the assertion failed. No real
+        // play's slug can be safely used here.
         var removedPlay = record
-        removedPlay.key = SceneKey(playID: "coriolanus", act: 1, scene: 1)
+        removedPlay.key = SceneKey(playID: "a-play-no-longer-here", act: 1, scene: 1)
         log.equal(
             corpus.opening(from: removedPlay).key, firstScene,
             "the opening for a play the corpus no longer has")

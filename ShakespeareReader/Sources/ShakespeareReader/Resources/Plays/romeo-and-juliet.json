@@ -8,9 +8,9 @@
   "kind": "gutenberg",
   "ebookID": 1513,
   "url": "https://www.gutenberg.org/ebooks/1513",
-  "retrieved": "2026-08-20",
+  "retrieved": "2026-08-21",
   "textSHA256": "5a2037a19e60cccb67b3f5fc93a12cb65c58694ce6a1dc61d0d67d0d2502b3b4",
-  "parserVersion": 3,
+  "parserVersion": 4,
   "note": "Public domain in the US. PG header/footer stripped."
  },
  "personae": [

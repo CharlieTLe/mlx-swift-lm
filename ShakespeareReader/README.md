@@ -129,9 +129,8 @@ A cache hit costs **1 ms** and no model work at all.
 
 ## What it does
 
-- **Corpus.** Hamlet, Macbeth and Romeo and Juliet, parsed from Project Gutenberg
-  into checked-in JSON by `tools/build_corpus.py`. Nothing at runtime depends on the
-  script.
+- **Corpus.** 35 plays, parsed from Project Gutenberg into checked-in JSON by
+  `tools/build_corpus.py`. Nothing at runtime depends on the script.
 - **Selection is a range of line indices**, not characters. SwiftUI's `Text` does not
   expose a selected character range, and a play is line-structured anyway — line
   numbers are what the context window, the cache key, and the citation are all built
@@ -143,9 +142,10 @@ A cache hit costs **1 ms** and no model work at all.
   while the arrows are pointed somewhere else.
 - **Context is deterministic**, from the play's own structure: no embeddings, because
   the act/scene/speaker hierarchy is a better index here and it is exact.
-- **One scene at a time.** This bounds rows to ~600 (Hamlet II.ii is the worst case),
-  makes every selection intrinsically scene-scoped, and keeps the cache key trivial.
-  The navigator is how you move.
+- **One scene at a time.** This bounds rows to under 1,000 (Love's Labour's Lost V.ii
+  is the worst case at 967, then The Winter's Tale IV.iv at 894), makes every selection
+  intrinsically scene-scoped, and keeps the cache key trivial. The rows are in a
+  `LazyVStack`, so only the visible ones are built. The navigator is how you move.
 - **Scene summaries** are generated in the background when a scene opens, in their
   own throwaway session. A selection cancels the prewarm rather than queueing behind
   it, and proceeds without a summary — the summary never blocks an annotation.
@@ -167,11 +167,12 @@ A cache hit costs **1 ms** and no model work at all.
   rebuilt under a stored position keeps the scene and drops the highlight rather than
   putting it over different lines.
 
-All three plays are in the reader; the model has clearly read all of them before,
+All 35 plays are in the reader; the model has clearly read the famous ones before,
 which is worth remembering when judging output. `--model mlx-community/Qwen3-8B-4bit`
 swaps in a larger model for comparison — test that on a *deliberately obscure*
 passage, because "To be or not to be" is in every training corpus on earth and tells
-you nothing. For scale, `--model mlx-community/Qwen3-0.6B-4bit` prefills at 8,426
+you nothing. Timon of Athens and the Henry VI plays are the useful end of the range for
+that. For scale, `--model mlx-community/Qwen3-0.6B-4bit` prefills at 8,426
 tok/s and decodes at 394 tok/s in 0.78 GB, and writes noticeably vaguer annotations.
 
 ## Corpus
@@ -182,22 +183,47 @@ python3 tools/build_corpus.py --all --verify              # stats only, writes n
 python3 tools/build_corpus.py --slug romeo-and-juliet --from-file /tmp/pg1513.txt --dump-scene 1.0
 ```
 
+`--all` is 35 sequential requests, and gutenberg.org answers a few of them with `504
+Gateway Time-out` on most runs, so each fetch retries with backoff and rejects a
+response missing the PG end marker. Without that the run died partway and left the
+resource directory half updated, with the exit code as the only sign. A clean rebuild
+takes well under a minute.
+
+Run it a few times in quick succession, though, and gutenberg.org starts answering `503
+Service Unavailable` for several minutes — 35 files per run is enough to get rate
+limited, and no retry budget survives that. `--from-file` with a `--slug` is the way to
+work on the parse itself without refetching; the checked-in JSON means nobody needs the
+network to build or run the app.
+
 The generated JSON is **checked in**, so the app builds and runs with no network for
 anyone else. The script exists to make the parse reproducible and auditable, not as a
 build step. Every pattern lives in one `PATTERNS` dict at the top of the file.
 
-What the parse gets, measured on the real files and asserted by `--selftest`:
+All 35 plays come from Project Gutenberg's **1500-1542 series**, one transcription
+lineage, which is what makes a single set of patterns viable at all. The catalog's
+other Shakespeare families are not interchangeable with it: 1100-1137 and 1765-1802 are
+separate transcriptions, 2235-2270 is the First Folio, and 100 is the complete works in
+one file. Three plays in the series are still missing — Troilus and Cressida, Pericles
+and The Two Noble Kinsmen — and `Resources/Plays/NOTICE.md` records why for each.
 
-| | acts | scenes | speech lines | speech headings | directions |
-|---|---|---|---|---|---|
-| Hamlet | 5 | 20 | 3,817 | 1,137 | 243 |
-| Macbeth | 5 | 28 | 2,329 | 649 | 168 |
-| Romeo and Juliet | 5 | 26 | 3,015 | 840 | 199 |
+What the parse gets, measured on the real files:
 
-0.00% of body lines are unclassified in any of the three, and every speech heading in
-the body produces a speech: 1,137 of 1,137, 649 of 649, and 840 of 840. Romeo and
-Juliet's 26 scenes are 24 numbered ones plus 2 Chorus blocks, filed as scene 0 of the
-acts they open and labelled `Prologue` in the navigator.
+| | plays | acts | scenes | speech lines | speech headings | directions | personae |
+|---|---|---|---|---|---|---|---|
+| whole corpus | 35 | 175 | 707 | 96,902 | 29,067 | 5,902 | 933 |
+| Hamlet | | 5 | 20 | 3,817 | 1,137 | 243 | 25 |
+| Macbeth | | 5 | 28 | 2,329 | 649 | 168 | 27 |
+| Romeo and Juliet | | 5 | 26 | 3,015 | 840 | 199 | 27 |
+
+0.00% of body lines are unclassified in **any** of the 35, and every speech heading in
+the body produces a speech. `--selftest` asserts the act, scene and speech-heading
+counts for every play by name, so a parser change that moves any of them fails there
+rather than in the reader; the three above additionally assert their collective
+speakers, which is a reading of the play rather than a count.
+
+Seven scene-0 chorus blocks exist across three plays: Romeo and Juliet's two, King
+Henry V's four, and King Henry VIII's Prologue. They are labelled `Prologue` in the
+navigator and cited `I.Pro`.
 
 Details that decide the parser, all of them observed rather than assumed:
 
@@ -207,13 +233,29 @@ Details that decide the parser, all of them observed rather than assumed:
 - **The Contents block cannot be skipped by column position.** Macbeth's Contents has
   `ACT I` at column 0, identical to its body header 85 lines later. The body scan is
   anchored after the `Dramatis Personæ` line instead, at the first act **or chorus**
-  header below it.
+  header below it. Twelfth Night is why that header may carry a trailing period: its
+  body sets `ACT I.` where its Contents sets `ACT I`, so requiring a bare header matched
+  only the Contents — which in that file sits *above* the personae block, leaving
+  nothing to match after it and failing the play outright.
+- **The personae block does not always end where it says it does.** Hamlet closes it
+  with `SCENE. Elsinore.` and Macbeth with `SCENE: In the end of the Fourth Act`, but
+  The Winter's Tale sets that summary in title case and As You Like It has no summary
+  line at all, only the sentence `The scene lies first near Oliver's house`. Both used
+  to run on into the body and file the entire play as cast: 2,930 personae entries for
+  As You Like It and 3,250 for The Winter's Tale, against 25 and 28 real ones. This is
+  the quietest failure in the parse — a cast list holding the whole play still decodes,
+  still renders, and poisons only the prompt's `WHO THEY ARE` block — so the block now
+  stops at the body header as well as at the summary.
 - **Speakers are not gated on Dramatis Personæ.** The text has collective and
   numbered speakers that never appear there — `ALL.`, `BOTH MURDERERS.`, `DANES.`,
   `FIRST CLOWN.`, `APPARITION.` Gating would have silently dropped those speeches, so
   the pattern is accepted and `--verify` *reports* unresolved tokens instead of
   failing on them (21 in Hamlet, 22 in Macbeth, 12 in Romeo and Juliet, all of them
-  genuinely absent from the personae list).
+  genuinely absent from the personae list). Across the whole corpus this runs from 0 in
+  As You Like It to 62 in Coriolanus and 60 in Richard III; the histories are full of
+  numbered Soldiers, Messengers and Lords. Only the first three plays have curated
+  `ALIASES`, so elsewhere a speaker like Coriolanus's `AEDILE` is named in the prompt
+  from its speech token but carries no personae blurb.
 - **A heading is not always one all-caps word.** Hamlet and Macbeth each share a line
   between speakers (`HORATIO and MARCELLUS.`, `MACBETH, LENNOX.`), set three
   collectives in title case (`All.`, `Both.`, `Danes.`), and drop the period off one
@@ -238,7 +280,8 @@ Details that decide the parser, all of them observed rather than assumed:
   lines of "Is this a dagger" with it; the plural has to be spelled out for the
   reverse reason, since `Alarums. Enter Macduff.` is a direction.
 - **The PG footer has to be stripped.** Leave it in and `DAMAGE.` parses as a speaker
-  in all three plays, from the license text.
+  in every one of the 35 files, from the license text. `--selftest` checks for that
+  speaker per play, since the footer is identical in all of them.
 - **A bracketed aside can open a verse line.** `[_Aside._] A little more than kin,
   and less than kind.` Treating the whole line as a stage direction drops the verse
   entirely, which is what happened to 22 speeches in Hamlet and 4 in Macbeth before
@@ -268,9 +311,20 @@ Details that decide the parser, all of them observed rather than assumed:
   it, shifting every citation in II.ii by one; and ` Musicians waiting. Enter
   Servants.` Both carry their second word deliberately. `Juliet` alone would take
   `Juliet, the County stays.`, which is Lady Capulet's verse. `--verify` prints
-  `dir-shaped verse` for exactly this reason: the expected output is one line per play
-  (Ophelia's `The King rises.`, Siward's `Enter, sir, the castle.`, and nothing in
-  Romeo and Juliet), so a real direction read as verse shows up as a fourth.
+  `dir-shaped verse` for exactly this reason: for these three plays the expected output
+  is one line each (Ophelia's `The King rises.`, Siward's `Enter, sir, the castle.`, and
+  nothing in Romeo and Juliet), so a real direction read as verse shows up as a fourth.
+
+  **This is the one known defect in the 32 plays added since.** The vocabulary was not
+  extended for them, and the statistics cannot show what it misses: an unbracketed
+  direction with an unlisted opener, arriving while a speaker is still open, is filed as
+  that speaker's verse — numbered, citable, and never counted as unclassified. A scan
+  puts it at roughly 34 lines, concentrated in the histories' battle directions
+  (`Dead March.`, `March.`, `Drum and colours.`, `Tucket.`, `Noise within.`, `Fight.
+  Excursions.`, `Trumpet sounds.`, `Music plays.`). Adding them means minding the same
+  trap: bare `Music` would take Titania's `Music, ho, music, such as charmeth sleep.`
+  and bare `Within` would take `Within two hours.`, so those need their second word the
+  way `Juliet appears` does.
 
 Line numbers are assigned **sequentially within each scene over speech lines only**.
 These are not Folger or Arden numbers — those count a verse line shared between two

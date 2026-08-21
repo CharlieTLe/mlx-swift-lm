@@ -8,9 +8,9 @@
   "kind": "gutenberg",
   "ebookID": 1533,
   "url": "https://www.gutenberg.org/ebooks/1533",
-  "retrieved": "2026-08-20",
+  "retrieved": "2026-08-21",
   "textSHA256": "1371a47e68246197f7f57017a83386fed75dbfebfd0ff51b4524921a3b38ff5e",
-  "parserVersion": 3,
+  "parserVersion": 4,
   "note": "Public domain in the US. PG header/footer stripped."
  },
  "personae": [

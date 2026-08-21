@@ -19,10 +19,12 @@ import hashlib
 import json
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from datetime import date, timezone, datetime
 
-PARSER_VERSION = 3
+PARSER_VERSION = 4
 SCHEMA_VERSION = 1
 
 # Every pattern lives here so re-tuning against a new transcription is one place.
@@ -41,11 +43,30 @@ PATTERNS = {
     "personae": re.compile(r"^\s*Dramatis Person"),
     # Closes the personae block. Hamlet has `SCENE. Elsinore.`, Macbeth has
     # `SCENE: In the end of the Fourth Act, ...` wrapping onto a second line.
+    #
+    # Not sufficient on its own, and deliberately left as the *first* of two
+    # terminators rather than replaced by the second: it is what keeps the trailing
+    # SCENE summary out of the cast list. Across the 35 plays two transcriptions
+    # never match it at all -- The Winter's Tale sets the summary in title case
+    # (`Scene: Sometimes in Sicilia; sometimes in Bohemia.`) and As You Like It has
+    # no summary line whatsoever, only the sentence `The scene lies first near
+    # Oliver's house`. In both the block used to run on into the body and file the
+    # whole play as cast: 2,930 personae for As You Like It and 3,250 for The
+    # Winter's Tale, against 25 and 28 real ones. `parse_personae` therefore also
+    # stops at the body header, which `find_body_start` has already located.
     "personae_end": re.compile(r"^\s*SCENE[.:]"),
     # Not reliably at column 0, and *not* distinguishable from the Contents block
     # by column: Macbeth's Contents has `ACT I` at column 0 identical to its body
     # header. The body scan is anchored after the personae block instead.
-    "act": re.compile(r"^\s*ACT ([IVXLC]+)\s*$"),
+    #
+    # The trailing period is optional because Twelfth Night's body headers carry one
+    # (`ACT I.`) while its Contents block does not. Requiring a bare header there
+    # matched only the Contents -- which sits *above* the personae block in that
+    # file, so nothing matched after it and the play failed outright with `no act
+    # header after the personae block`. Tolerating the period cannot pull the scan
+    # back into a Contents block, because the scan starts at the personae block and
+    # every one of the 35 files puts Contents above it.
+    "act": re.compile(r"^\s*ACT ([IVXLC]+)\.?\s*$"),
     # Hamlet I.i is at column 0 but I.ii through I.v carry a single leading space,
     # so leading whitespace has to be tolerated. Upper-case `SCENE` also separates
     # the body from the Contents block, which uses title-case `Scene I.`.
@@ -135,6 +156,23 @@ TITLE_CASE_SPEAKERS = {"All.": "ALL", "Both.": "BOTH", "Danes.": "DANES"}
 # ` Musicians waiting. Enter Servants.` (1144) are unbracketed directions no other
 # entry reaches. `Juliet` alone will not do -- `Juliet, the County stays.` (952) is
 # Lady Capulet's verse -- so both openers carry their second word.
+#
+# The list has NOT been extended for the 32 plays added since, and that is the one
+# known defect in their parse. This is the failure mode the stats cannot see: an
+# unbracketed direction with an unlisted opener, arriving while a speaker is still
+# open, is filed as that speaker's verse -- numbered, citable, and never counted as
+# unclassified. A scan of the added plays for direction-shaped verse puts it at
+# roughly 34 lines, concentrated in the histories, wanting about eight more openers:
+#
+#     Dead March.    March.       Drum and colours.  Tucket.
+#     Noise within.  Fight.       Trumpet sounds.    Music plays.
+#
+# Whoever adds them should mind the same trap the entries above document. `Music`
+# and `Within` are the dangerous ones: bare `Music` would take Titania's `Music, ho,
+# music, such as charmeth sleep.` and bare `Within` would take `Within two hours.`
+# and `Within their alabaster innocent arms.`, so both need their second word, as
+# `Juliet appears` does. `--verify` prints the dir-shaped verse per play, which is
+# the review list for it.
 DIRECTION_OPENERS = re.compile(
     r"^_?(Enter|Re-enter|Alarums?|Flourish|Thunder|Hautboys|Sennet|Danish march"
     r"|Retreat|Trumpets|A banquet|Ghost rises|The Ghost of|The King rises"
@@ -149,23 +187,83 @@ DIRECTION_TERMINATORS = (".", "!", "?", "_", "]", ")")
 
 ROMAN = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
 
+def gutenberg(ebook_id, title):
+    """A play from Project Gutenberg's 1500-1542 series.
+
+    Every entry below is from that one series, and that is the point: it is a single
+    transcription lineage, so the patterns tuned against three of its files hold for
+    the rest. The other Shakespeare families in the catalog are *not*
+    interchangeable with it. 1100-1137 and 1765-1802 are different transcriptions,
+    2235-2270 is the First Folio, and 100 is the complete works in one file; each
+    would need its own pass over PATTERNS.
+    """
+    return {
+        "ebook_id": ebook_id,
+        "title": title,
+        "url": f"https://www.gutenberg.org/cache/epub/{ebook_id}/pg{ebook_id}.txt",
+    }
+
+
+# Keyed by slug, which is also the JSON filename, which is the order the navigator
+# lists plays in -- `CorpusLoader` sorts by filename. Alphabetical by slug, so the
+# reader opens on All's Well rather than Hamlet from a cold start.
+#
+# The comedies, histories and tragedies are not grouped, and the titles are PG's own
+# rather than a house style: `King Henry VI, Part 1` reads oddly next to
+# `Coriolanus`, but it is what the source file says, and matching it keeps the JSON
+# traceable to its input without a mapping table to maintain.
 SOURCES = {
-    "hamlet": {
-        "ebook_id": 1524,
-        "title": "Hamlet, Prince of Denmark",
-        "url": "https://www.gutenberg.org/cache/epub/1524/pg1524.txt",
-    },
-    "macbeth": {
-        "ebook_id": 1533,
-        "title": "Macbeth",
-        "url": "https://www.gutenberg.org/cache/epub/1533/pg1533.txt",
-    },
-    "romeo-and-juliet": {
-        "ebook_id": 1513,
-        "title": "Romeo and Juliet",
-        "url": "https://www.gutenberg.org/cache/epub/1513/pg1513.txt",
-    },
+    "alls-well-that-ends-well": gutenberg(1529, "All's Well That Ends Well"),
+    "antony-and-cleopatra": gutenberg(1534, "Antony and Cleopatra"),
+    "as-you-like-it": gutenberg(1523, "As You Like It"),
+    "comedy-of-errors": gutenberg(1504, "The Comedy of Errors"),
+    "coriolanus": gutenberg(1535, "Coriolanus"),
+    "cymbeline": gutenberg(1538, "Cymbeline"),
+    "hamlet": gutenberg(1524, "Hamlet, Prince of Denmark"),
+    "henry-iv-part-1": gutenberg(1516, "King Henry IV, Part 1"),
+    "henry-iv-part-2": gutenberg(1518, "King Henry IV, Part 2"),
+    "henry-v": gutenberg(1521, "King Henry V"),
+    "henry-vi-part-1": gutenberg(1500, "King Henry VI, Part 1"),
+    "henry-vi-part-2": gutenberg(1501, "King Henry VI, Part 2"),
+    "henry-vi-part-3": gutenberg(1502, "King Henry VI, Part 3"),
+    "henry-viii": gutenberg(1541, "King Henry VIII"),
+    "julius-caesar": gutenberg(1522, "Julius Caesar"),
+    "king-john": gutenberg(1511, "King John"),
+    "king-lear": gutenberg(1532, "King Lear"),
+    "loves-labours-lost": gutenberg(1510, "Love's Labour's Lost"),
+    "macbeth": gutenberg(1533, "Macbeth"),
+    "measure-for-measure": gutenberg(1530, "Measure for Measure"),
+    "merchant-of-venice": gutenberg(1515, "The Merchant of Venice"),
+    "merry-wives-of-windsor": gutenberg(1517, "The Merry Wives of Windsor"),
+    "midsummer-nights-dream": gutenberg(1514, "A Midsummer Night's Dream"),
+    "much-ado-about-nothing": gutenberg(1519, "Much Ado about Nothing"),
+    "othello": gutenberg(1531, "Othello"),
+    "richard-ii": gutenberg(1512, "King Richard II"),
+    "richard-iii": gutenberg(1503, "King Richard III"),
+    "romeo-and-juliet": gutenberg(1513, "Romeo and Juliet"),
+    "taming-of-the-shrew": gutenberg(1508, "The Taming of the Shrew"),
+    "tempest": gutenberg(1540, "The Tempest"),
+    "timon-of-athens": gutenberg(1536, "Timon of Athens"),
+    "titus-andronicus": gutenberg(1507, "Titus Andronicus"),
+    "twelfth-night": gutenberg(1526, "Twelfth Night"),
+    "two-gentlemen-of-verona": gutenberg(1509, "The Two Gentlemen of Verona"),
+    "winters-tale": gutenberg(1539, "The Winter's Tale"),
 }
+
+# Three plays in the same series are deliberately absent above, recorded here so the
+# gap is a known one rather than an oversight.
+#
+# Troilus and Cressida (1528) and Pericles (1537) fail `--verify` on a chorus block
+# whose verse carries no speech heading at all: Troilus prints `PROLOGUE` and then 31
+# unattributed lines, and Pericles opens each of its five acts with `Enter Gower.`
+# above the same shape. Scene 0 is created, every line in it falls to the open
+# direction, and the scene ends with no speech. Romeo and Juliet's choruses are why
+# this case never arose before: theirs carry a `CHORUS.` heading.
+#
+# The Two Noble Kinsmen is a gap of a different kind. 1542 is a First Folio
+# transcription (`Actus Primus.`, `(The Persons represented in the Play.`) and is not
+# in this series at all; the in-series 1506 lists `PROLOGUE` as its first personae
+# entry, which `find_body_start` takes for the body header, leaving an empty cast.
 
 # Speech tokens that belong to a personae entry filed under another name, because
 # Dramatis Personæ names the character and the dialogue labels the role: Hamlet's
@@ -175,6 +273,15 @@ SOURCES = {
 # a real blurb to contribute, so the collective and numbered speakers (ALL., BOTH
 # MURDERERS., FIRST WITCH., DANES.) are left unresolved rather than attached to a
 # nearby entry that would describe them wrongly. --verify lists what is left.
+#
+# Only the three plays that were here first are curated. `ALIASES.get(slug, {})`
+# means the other 32 simply have none, which costs a `WHO THEY ARE` line for the
+# speakers that need one and nothing else: `Cast.resolve` already falls back to the
+# speaking token, so an unaliased speaker is named in the prompt, just without their
+# personae blurb. The histories are where this shows most -- Coriolanus leaves 62
+# tokens unresolved and Richard III 60, against 0 in As You Like It -- and each one
+# is a judgment call about a specific entry, so `--verify` reporting them is the
+# hand-off rather than a generated guess.
 ALIASES = {
     "hamlet": {
         "CLAUDIUS": ["KING"],
@@ -221,15 +328,22 @@ def title_case(token):
     return " ".join(word.capitalize() for word in token.split())
 
 
-def parse_personae(lines, start, aliases):
+def parse_personae(lines, start, aliases, stop=None):
     """Entries between the `Dramatis Personæ` heading and the SCENE summary.
 
     Blank lines occur *inside* the block (Macbeth groups the women, the crowds,
     and the apparitions with blank lines between), so the block ends at the SCENE
     summary rather than at the first blank line.
+
+    `stop` is the body header, and is the backstop for the two files whose summary
+    line `personae_end` cannot see -- see that pattern's comment. Passing it means
+    the block can never outrun the body even in a transcription neither terminator
+    anticipates, which is worth having because the failure is silent: a cast list
+    holding the whole play still decodes, still renders, and quietly poisons every
+    `WHO THEY ARE` block in the prompt.
     """
     personae = []
-    for line in lines[start + 1 :]:
+    for line in lines[start + 1 : stop]:
         if PATTERNS["personae_end"].match(line):
             break
         entry = line.strip()
@@ -585,7 +699,8 @@ def parse_play(slug, text, retrieved):
     body_lines = lines[start + 1 : end]
 
     personae_at, body_at = find_body_start(body_lines)
-    personae = parse_personae(body_lines, personae_at, ALIASES.get(slug, {}))
+    personae = parse_personae(
+        body_lines, personae_at, ALIASES.get(slug, {}), body_at)
 
     stats = ParseStats()
     acts = parse_body(body_lines, body_at, stats)
@@ -727,19 +842,49 @@ def dump_scene(play, spec):
 # ---------------------------------------------------------------------------
 
 
-def read_source(slug, from_file):
+def read_source(slug, from_file, attempts=4):
     """Read the source text from disk or fetch it.
 
     `--from-file` stays a first-class path because gutenberg.org needs a network
     allowlist entry here, and a future reader may not have one.
+
+    The retry is not defensive padding: `--all` is 35 sequential requests now, and
+    gutenberg.org answers a few of them with `504 Gateway Time-out` on most runs.
+    Without it the run dies partway through and the plays after the failure are
+    silently never written -- which is worse than slow, because the exit code is the
+    only sign and the resource directory is left half updated.
+
+    It does not survive rate limiting, and is not meant to. Several `--all` runs in
+    quick succession earn `503 Service Unavailable` for minutes at a time, which no
+    backoff inside one run can wait out. Use `--from-file` with a `--slug` when
+    iterating on the parse.
+
+    An incomplete body is treated as a failure too. A cut-off response decodes
+    perfectly and parses to a play that is simply missing its last act, so the PG end
+    marker is checked here rather than left to `parse_play` to miss.
     """
     if from_file:
         with open(from_file, "rb") as handle:
             return handle.read().decode("utf-8")
     url = SOURCES[slug]["url"]
-    print(f"fetching {url}", file=sys.stderr)
-    with urllib.request.urlopen(url) as response:
-        return response.read().decode("utf-8")
+    for attempt in range(1, attempts + 1):
+        print(f"fetching {url}", file=sys.stderr)
+        try:
+            with urllib.request.urlopen(url, timeout=90) as response:
+                text = response.read().decode("utf-8")
+            if not any(PATTERNS["pg_end"].match(line) for line in split_lines(text)):
+                raise ValueError("response has no PG end marker; body was truncated")
+            return text
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            if attempt == attempts:
+                raise SystemExit(f"{slug}: giving up after {attempts} attempts: {error}")
+            delay = 2**attempt
+            print(
+                f"  {slug}: {error}; retrying in {delay}s "
+                f"({attempt}/{attempts - 1})",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def main():
