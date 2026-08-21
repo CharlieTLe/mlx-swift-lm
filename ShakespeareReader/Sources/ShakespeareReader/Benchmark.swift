@@ -36,13 +36,14 @@ struct PassageSpec {
 }
 
 /// Passages the headless modes walk, chosen to span the range that matters: a cold
-/// scene opening, the longest scene in either play, a 35-line selection, prose, and
-/// heavy wordplay.
+/// scene opening, the longest scene in the corpus, a 35-line selection, prose, heavy
+/// wordplay, a chorus scene, and a passage that changes speaker on nearly every
+/// line, which the first ten, all single-speaker, never did.
 enum SamplePassages {
     static let specs = [
         "hamlet:1.1:1-6",  // the opening challenge, cold start
         "hamlet:1.5:88-91",  // the Ghost's exit
-        "hamlet:2.2:250-262",  // deep into the longest scene in either play
+        "hamlet:2.2:250-262",  // deep into the longest scene in the corpus
         "hamlet:3.1:62-96",  // the soliloquy, all 35 lines
         "hamlet:4.4:20-24",  // a short scene
         "hamlet:5.1:1-12",  // prose, the grave-diggers
@@ -50,6 +51,9 @@ enum SamplePassages {
         "macbeth:2.3:1-20",  // the Porter, prose and wordplay
         "macbeth:5.5:17-28",  // "Tomorrow, and tomorrow"
         "macbeth:1.7:1-28",  // a whole soliloquy
+        "romeo-and-juliet:1.0:1-14",  // the whole Prologue, a scene-0 chorus block
+        "romeo-and-juliet:1.5:96-109",  // the shared sonnet, six speaker changes
+        "romeo-and-juliet:2.2:1-10",  // the balcony, across an interleaved direction
     ]
 }
 

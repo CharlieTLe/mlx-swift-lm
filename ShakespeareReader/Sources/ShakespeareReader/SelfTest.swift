@@ -66,6 +66,12 @@ enum SelfTest {
     /// joint ones in Hamlet (`HORATIO and MARCELLUS.`) and 1 in Macbeth
     /// (`MACBETH, LENNOX.`), the 4 title-case collectives (`All.`, `Both.`,
     /// `Danes.`), and the one `BARNARDO` that lost its period.
+    ///
+    /// Romeo and Juliet's 840 include 2 `CHORUS.` headings inside the two scene-0
+    /// chorus blocks, which are dropped entirely if the Prologue is not parsed, and
+    /// 2 headings the transcription left on the same line as their first verse line
+    /// (`ROMEO. Nurse, commend me…`, `THIRD WATCH. Here is a Friar…`), which are
+    /// swallowed into the previous speaker's text if they are not recovered.
     private struct Expected {
         let acts: Int
         let scenes: Int
@@ -80,6 +86,12 @@ enum SelfTest {
         "macbeth": Expected(
             acts: 5, scenes: 28, speechHeadings: 649,
             collectives: ["ALL", "BOTH MURDERERS", "FIRST WITCH", "APPARITION"]),
+        // 26 scenes: 24 numbered plus the two Chorus blocks, filed as scene 0 of
+        // Acts I and II. `THIRD WATCH` is the canary for the inline-heading rule:
+        // it has no other heading anywhere in the play.
+        "romeo-and-juliet": Expected(
+            acts: 5, scenes: 26, speechHeadings: 840,
+            collectives: ["FIRST CITIZEN", "FIRST SERVANT", "FIRST WATCH", "THIRD WATCH"]),
     ]
 
     private static func corpus(_ log: Log) {
@@ -134,7 +146,7 @@ enum SelfTest {
             log.equal(headings, target.speechHeadings, "\(play.id) speech headings")
 
             // Proves the PG license footer was stripped: leave it in and `DAMAGE.`
-            // parses as a speaker in both plays.
+            // parses as a speaker in all three plays.
             log.check(
                 !speakers.contains("DAMAGE"),
                 "\(play.id) has DAMAGE as a speaker — the PG footer was not stripped")
@@ -150,6 +162,9 @@ enum SelfTest {
 
         soliloquy(log, in: corpus)
         resumedSpeech(log, in: corpus)
+        chorus(log, in: corpus)
+        balconyDirection(log, in: corpus)
+        inlineHeading(log, in: corpus)
     }
 
     /// "To be, or not to be" is exactly 35 consecutive `HAMLET` lines, with no
@@ -203,6 +218,97 @@ enum SelfTest {
         let before = scene.lines[at - 1]
         log.equal(before.kind, .direction, "the line above 'But, soft, behold!'")
         log.equal(before.text, "Re-enter Ghost.", "the interrupting direction")
+    }
+
+    /// Romeo and Juliet's two Chorus blocks, filed as scene 0 of the act they open.
+    ///
+    /// The Prologue is the passage a parser loses most quietly: it sits *above*
+    /// `ACT I` in the transcription, so anchoring the body scan on the first act
+    /// header dropped all 14 lines without even counting them as unclassified. The
+    /// Act II Chorus was the mirror image, inside an act but above the first
+    /// `SCENE` header, so it fell to `unclassified` whole.
+    private static func chorus(_ log: Log, in corpus: Corpus) {
+        for act in [1, 2] {
+            guard
+                let scene = corpus.scene(
+                    SceneKey(playID: "romeo-and-juliet", act: act, scene: 0))
+            else {
+                log.fail("Romeo and Juliet \(act).0 not found")
+                continue
+            }
+            log.equal(scene.openingDirection, "Enter Chorus.", "the \(act).0 opening")
+            let speech = scene.lines.filter { $0.kind == .speech }
+            log.equal(speech.count, 14, "the length of the \(act).0 sonnet")
+            log.check(
+                speech.allSatisfy { $0.speaker == "CHORUS" },
+                "Romeo and Juliet \(act).0 has a speaker other than CHORUS")
+        }
+
+        log.equal(
+            corpus.scene(SceneKey(playID: "romeo-and-juliet", act: 1, scene: 0))?
+                .lines.first(where: { $0.kind == .speech })?.text,
+            "Two households, both alike in dignity,", "the Prologue's first line")
+
+        // Scene 0 needs its own naming: `RomanNumeral.string(0)` is the empty
+        // string, so the reader would show "Scene " and cite "I..1-14".
+        log.equal(SceneLabel.string(0), "Prologue", "the scene-0 label")
+        log.equal(SceneLabel.citation(0), "Pro", "the scene-0 citation component")
+    }
+
+    /// The balcony scene's own direction, which is unbracketed and matches no
+    /// general direction opener.
+    ///
+    /// Left out of the vocabulary, ` Juliet appears above at a window.` is emitted
+    /// as Romeo's speech line 2, which both puts a stage direction in his mouth and
+    /// shifts every citation in II.ii by one.
+    private static func balconyDirection(_ log: Log, in corpus: Corpus) {
+        guard
+            let scene = corpus.scene(
+                SceneKey(playID: "romeo-and-juliet", act: 2, scene: 2))
+        else {
+            log.fail("Romeo and Juliet II.ii not found")
+            return
+        }
+        guard
+            let at = scene.lines.firstIndex(where: {
+                $0.text.hasPrefix("But soft, what light")
+            }), at > 0
+        else {
+            log.fail("'But soft, what light' not found in Romeo and Juliet II.ii")
+            return
+        }
+        let before = scene.lines[at - 1]
+        log.equal(before.kind, .direction, "the line above 'But soft, what light'")
+        log.equal(
+            before.text, "Juliet appears above at a window.",
+            "the balcony scene's own direction")
+        log.equal(scene.lines[at].number, 2, "'But soft, what light' line number")
+    }
+
+    /// A heading the transcription left on the same line as its first verse line.
+    ///
+    /// `THIRD WATCH.` has no heading of its own anywhere in the play, so without the
+    /// inline rule this speech is attributed to whoever spoke last, with the heading
+    /// left sitting inside that speaker's own text, and the Watch's third man never
+    /// enters the cast at all.
+    private static func inlineHeading(_ log: Log, in corpus: Corpus) {
+        guard
+            let scene = corpus.scene(
+                SceneKey(playID: "romeo-and-juliet", act: 5, scene: 3))
+        else {
+            log.fail("Romeo and Juliet V.iii not found")
+            return
+        }
+        guard
+            let line = scene.lines.first(where: {
+                $0.text.hasPrefix("Here is a Friar that trembles")
+            })
+        else {
+            log.fail("'Here is a Friar that trembles' not found in R&J V.iii")
+            return
+        }
+        log.equal(line.speaker, "THIRD WATCH", "the recovered inline speaker")
+        log.equal(line.startsSpeech, true, "the recovered inline heading")
     }
 
     // MARK: - Selection
@@ -394,6 +500,26 @@ enum SelfTest {
                 Cast(play: macbeth).resolve("King Duncan"), "DUNCAN",
                 "a two-word name in a direction")
         }
+
+        // The same link in Romeo and Juliet: the Prince speaks as `PRINCE.` and
+        // Dramatis Personæ files him as `ESCALUS, Prince of Verona.` Friar Lawrence
+        // needs no alias, because `Cast.resolve` falls back to the speaking tokens,
+        // and this is what proves it.
+        if let romeo = corpus.play("romeo-and-juliet") {
+            let cast = Cast(play: romeo)
+            log.equal(cast.label("PRINCE"), "Prince (Escalus)", "the PRINCE label")
+            log.equal(cast.display("PRINCE"), "Prince", "the PRINCE display name")
+            log.equal(
+                cast.resolve("Friar Lawrence"), "FRIAR LAWRENCE",
+                "an unaliased two-word name in a direction")
+        }
+
+        // A chorus block is addressable through `SceneKey` like any other scene, and
+        // the tracker reads its opening direction: scene 0 is not a special case
+        // anywhere but in `SceneLabel`.
+        log.equal(
+            present("romeo-and-juliet", 1, 0, atLine: 1), ["Chorus"],
+            "the Prologue, where Chorus enters and speaks")
     }
 
     // MARK: - Follow-up parsing

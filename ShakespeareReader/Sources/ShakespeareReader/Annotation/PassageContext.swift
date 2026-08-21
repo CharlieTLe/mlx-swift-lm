@@ -163,7 +163,7 @@ enum Citation {
     {
         let title = play.title.split(separator: ",").first.map(String.init) ?? play.title
         let location =
-            "\(RomanNumeral.string(key.act)).\(RomanNumeral.string(key.scene, uppercase: false))"
+            "\(RomanNumeral.string(key.act)).\(SceneLabel.citation(key.scene))"
 
         let numbers = scene.lines[range].compactMap(\.number)
         guard let first = numbers.first, let last = numbers.last else {

@@ -99,7 +99,7 @@ struct NavigatorView: View {
     @ViewBuilder
     private func row(_ entry: SceneEntry) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text("Scene \(RomanNumeral.string(entry.scene.number))")
+            Text(SceneLabel.string(entry.scene.number))
                 .font(.callout)
             // The setting is what makes a scene list navigable — "A churchyard"
             // locates the grave-diggers far faster than "Scene I" does.

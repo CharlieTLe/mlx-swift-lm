@@ -22,7 +22,7 @@ import sys
 import urllib.request
 from datetime import date, timezone, datetime
 
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 SCHEMA_VERSION = 1
 
 # Every pattern lives here so re-tuning against a new transcription is one place.
@@ -84,6 +84,24 @@ PATTERNS = {
     # The uppercase run inside a personae entry is the token that matches a speech
     # heading: `The GHOST of the late king` speaks as `GHOST.`
     "personae_key": re.compile(r"\b([A-Z][A-Z’']*(?: [A-Z][A-Z’']*)*)\b"),
+    # A chorus block's heading. Romeo and Juliet's `THE PROLOGUE` sits *above*
+    # `ACT I` (pg1513.txt:121 against 147), so the body cannot be anchored on the
+    # first act header alone or the sonnet is never seen. No trailing period is
+    # allowed, which is what keeps this off the Contents entry `THE PROLOGUE.`
+    # (line 41) and off Hamlet's `PROLOGUE.` speech heading in III.ii.
+    "prologue": re.compile(r"^\s*(?:THE )?PROLOGUE\s*$"),
+    # A heading the transcription left on the same line as its first verse line:
+    # `ROMEO. Nurse, commend me to thy lady and mistress. I protest unto`
+    # (pg1513.txt:2288) and `THIRD WATCH. Here is a Friar that trembles, sighs,
+    # and weeps.` (5107). Without this both are attributed to whoever spoke last
+    # with the heading left inside their own text, and THIRD WATCH -- who has no
+    # other heading in the play -- never enters the cast at all.
+    #
+    # Across all three files this also matches the `SCENE I. A public place.`
+    # headers, which is harmless: `scene` has already consumed those by the point
+    # in the loop where this is tested.
+    "inline_speaker": re.compile(
+        r"^(?P<speaker>[A-Z][A-Z’' ]{1,30})\.[ ](?P<text>\S.*)$"),
 }
 
 # Collective headings the transcription sets in title case: `All.`, `Both.`,
@@ -111,9 +129,16 @@ TITLE_CASE_SPEAKERS = {"All.": "ALL", "Both.": "BOTH", "Danes.": "DANES"}
 # the last eight lines of "Is this a dagger" with it. The plural is spelled out for
 # the same reason in reverse: `Alarums. Enter Macduff.` is a direction, and without
 # it that line parses as Macbeth's verse.
+#
+# The last two entries are Romeo and Juliet's, and are the demonstration that this
+# vocabulary is per-transcription: ` Juliet appears above at a window.` (1530) and
+# ` Musicians waiting. Enter Servants.` (1144) are unbracketed directions no other
+# entry reaches. `Juliet` alone will not do -- `Juliet, the County stays.` (952) is
+# Lady Capulet's verse -- so both openers carry their second word.
 DIRECTION_OPENERS = re.compile(
     r"^_?(Enter|Re-enter|Alarums?|Flourish|Thunder|Hautboys|Sennet|Danish march"
-    r"|Retreat|Trumpets|A banquet|Ghost rises|The Ghost of|The King rises)(?=[ .,])"
+    r"|Retreat|Trumpets|A banquet|Ghost rises|The Ghost of|The King rises"
+    r"|Juliet appears|Musicians waiting)(?=[ .,])"
 )
 
 # What ends a direction. A wrapped direction breaks mid-clause, so an open
@@ -135,6 +160,11 @@ SOURCES = {
         "title": "Macbeth",
         "url": "https://www.gutenberg.org/cache/epub/1533/pg1533.txt",
     },
+    "romeo-and-juliet": {
+        "ebook_id": 1513,
+        "title": "Romeo and Juliet",
+        "url": "https://www.gutenberg.org/cache/epub/1513/pg1513.txt",
+    },
 }
 
 # Speech tokens that belong to a personae entry filed under another name, because
@@ -152,6 +182,12 @@ ALIASES = {
         "Two Clowns": ["FIRST CLOWN", "SECOND CLOWN"],
     },
     "macbeth": {},
+    # The Prince speaks throughout as `PRINCE.`; Dramatis Personæ files him as
+    # `ESCALUS, Prince of Verona.` -- the Claudius case exactly. It is also the
+    # only alias in this play that earns its tokens: every other unresolved token
+    # (the numbered Servants, Watchmen and Musicians, `CITIZENS`) belongs to a
+    # personae entry with an empty blurb, so attaching it would say nothing.
+    "romeo-and-juliet": {"ESCALUS": ["PRINCE"]},
 }
 
 
@@ -202,8 +238,12 @@ def parse_personae(lines, start, aliases):
         # A wrapped entry continues the previous one: Macbeth's `Lords, Gentlemen,
         # Officers, Soldiers, Murderers, Attendants and` / `Messengers.` Keyed on
         # the dangling conjunction rather than on a missing period, because most
-        # entries in Hamlet have no trailing period at all.
-        if personae and personae[-1]["_raw"].rstrip().endswith(("and", ",")):
+        # entries in Hamlet have no trailing period at all. The semicolon is Romeo
+        # and Juliet's `Citizens of Verona; several Men and Women, relations to
+        # both houses;` (pg1513.txt:112) -- the one `;`-terminated line in any of
+        # the three personae blocks, and without it `Maskers` is read as a 28th
+        # person.
+        if personae and personae[-1]["_raw"].rstrip().endswith(("and", ",", ";")):
             personae[-1]["_raw"] += " " + entry
             personae[-1]["blurb"] = blurb_for(
                 personae[-1]["_raw"], personae[-1]["name"])
@@ -347,11 +387,28 @@ def parse_body(lines, body_start, stats):
         paragraph_start = at_paragraph_start
         at_paragraph_start = False
 
+        # `THE PROLOGUE` opens the body above `ACT I` (pg1513.txt:121 against 147),
+        # so the act it belongs to has no header yet. Printed editions file it
+        # under Act I, and so does this.
+        if act is None and PATTERNS["prologue"].match(raw):
+            flush()
+            act = {"number": 1, "scenes": []}
+            acts.append(act)
+            scene = None
+            speaker = None
+            continue
+
         act_match = PATTERNS["act"].match(raw)
         if act_match:
             flush()
-            act = {"number": roman_to_int(act_match.group(1)), "scenes": []}
-            acts.append(act)
+            # A fresh local name: `number` is the live line counter. Re-appending
+            # on a header for the act already open is what `ACT I`, 26 lines under
+            # `THE PROLOGUE`, would otherwise do -- giving the play six acts, the
+            # first of them holding nothing but the Prologue.
+            act_number = roman_to_int(act_match.group(1))
+            if act is None or act["number"] != act_number:
+                act = {"number": act_number, "scenes": []}
+                acts.append(act)
             scene = None
             speaker = None
             continue
@@ -371,10 +428,24 @@ def parse_body(lines, body_start, stats):
             continue
 
         if scene is None:
-            # Anything before the first scene of the first act: the `SCENE.
-            # Elsinore.` summary and blank-padded front matter.
-            stats.unclassified.append(stripped)
-            continue
+            if act is None:
+                # Anything before the first act: the `SCENE. Elsinore.` summary and
+                # blank-padded front matter.
+                stats.unclassified.append(stripped)
+                continue
+            # Inside an act with no `SCENE` header yet: a chorus block. Romeo and
+            # Juliet's `ACT II` (pg1513.txt:1425) is followed by `Enter Chorus.`
+            # and a 14-line sonnet, with no header until `SCENE I.` 23 lines down,
+            # so every one of those lines used to fall to `unclassified` -- one
+            # dropped sonnet, and the whole of that play's 0.53%.
+            #
+            # Scene 0, which `SceneLabel` renders `Prologue` and cites `Pro`.
+            # Deliberately falls through rather than continuing, so `Enter Chorus.`
+            # is classified as the direction it is.
+            scene = {"number": 0, "setting": "", "lines": []}
+            act["scenes"].append(scene)
+            speaker = None
+            number = 0
 
         heading = heading_for(stripped)
         if heading is not None:
@@ -383,6 +454,22 @@ def parse_body(lines, body_start, stats):
             seen.add(speaker)
             speech_starts = True
             continue
+
+        inline = (
+            PATTERNS["inline_speaker"].match(stripped) if paragraph_start else None
+        )
+        if inline is not None:
+            # A heading the transcription left on the same line as its verse:
+            # `ROMEO. Nurse, commend me…` (2288) and `THIRD WATCH. Here is a
+            # Friar…` (5107). Opening the speech here and falling through with the
+            # rest of the line is what puts THIRD WATCH in the cast at all.
+            flush()
+            speaker = inline.group("speaker")
+            seen.add(speaker)
+            speech_starts = True
+            stripped = inline.group("text")
+            # Not *also* a resumed speech: it carries its own heading.
+            paragraph_start = False
 
         if PATTERNS["direction"].match(stripped):
             # A new bracket always starts a new direction; a line that does not
@@ -453,11 +540,16 @@ def parse_body(lines, body_start, stats):
 
 
 def find_body_start(lines):
-    """First act header after the personae block.
+    """First act or chorus header after the personae block.
 
     Column position will not do this: Macbeth's Contents block has `ACT I` at
     column 0, identical to its body header 85 lines later. The personae block sits
-    between the two in both files, so it is the reliable anchor.
+    between the two in all three files, so it is the reliable anchor.
+
+    The chorus header counts because Romeo and Juliet's `THE PROLOGUE` is above
+    `ACT I`, not below it. Anchoring on the act header alone starts the scan 26
+    lines too late and drops "Two households, both alike in dignity" without even
+    counting it as unclassified.
     """
     personae_at = next(
         (i for i, line in enumerate(lines) if PATTERNS["personae"].match(line)), None
@@ -468,7 +560,7 @@ def find_body_start(lines):
         (
             i
             for i in range(personae_at, len(lines))
-            if PATTERNS["act"].match(lines[i])
+            if PATTERNS["act"].match(lines[i]) or PATTERNS["prologue"].match(lines[i])
         ),
         None,
     )
@@ -558,6 +650,15 @@ def verify(slug, play, stats):
     print(f"{slug}:")
     print(f"  acts             {len(play['acts'])}")
     print(f"  scenes           {len(scenes)}")
+    # Acts that opened on a chorus block. Printed because a dropped Prologue is
+    # otherwise invisible here: before scene 0 existed those lines were not even
+    # counted as unclassified, so nothing in this report moved when they vanished.
+    chorus = [
+        f"{act['number']}.{scene['number']}"
+        for act, scene in scenes
+        if scene["number"] == 0
+    ]
+    print(f"  chorus scenes    {', '.join(chorus) or '-'}")
     print(f"  speech lines     {stats.speech_lines}")
     print(f"  direction lines  {stats.direction_lines}")
     print(f"  wrapped dirs     {stats.multiline_directions}")

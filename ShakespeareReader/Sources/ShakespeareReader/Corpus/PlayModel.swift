@@ -146,3 +146,21 @@ enum RomanNumeral {
         return uppercase ? result : result.lowercased()
     }
 }
+
+/// How a scene number is named and cited.
+///
+/// Exists because scene 0 is real: `tools/build_corpus.py` files a chorus block
+/// (Romeo and Juliet's two Prologues) as scene 0 of the act it opens, and
+/// `RomanNumeral.string(0)` is the empty string, so every call site would otherwise
+/// render "Scene " and cite "I..1-14".
+enum SceneLabel {
+    /// The reader-facing name, for the navigator row and the scene heading.
+    static func string(_ number: Int) -> String {
+        number == 0 ? "Prologue" : "Scene \(RomanNumeral.string(number))"
+    }
+
+    /// The citation component. `Pro` is the Folger convention: `I.Pro.1-14`.
+    static func citation(_ number: Int) -> String {
+        number == 0 ? "Pro" : RomanNumeral.string(number, uppercase: false)
+    }
+}

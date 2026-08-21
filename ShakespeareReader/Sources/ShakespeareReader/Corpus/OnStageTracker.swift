@@ -89,6 +89,12 @@ struct Cast: Sendable {
 /// `Exeunt all but Hamlet`, `Enter two Clowns with spades and mattocks`, an `Exit`
 /// with no name at all — so the scan aims to be usefully right rather than
 /// complete.
+///
+/// Romeo and Juliet's balcony scene is the clearest case of the limit: `Juliet
+/// appears above at a window.` carries no movement keyword, so the scan does not
+/// place her on stage until she speaks at line 26 of II.ii. Inside what
+/// "approximate" promises, and not worth a keyword that would fit one direction in
+/// one play.
 enum OnStageTracker {
 
     /// Keywords in the order they must be tested: `Exeunt all but` before

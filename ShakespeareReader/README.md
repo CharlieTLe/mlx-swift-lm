@@ -68,25 +68,27 @@ Use `-c release`; a debug 4B forward pass is not worth watching.
 
 ## Latency
 
-Measured on an M4 Max with `mlx-community/Qwen3-4B-4bit`, over the ten sample
+Measured on an M4 Max with `mlx-community/Qwen3-4B-4bit`, over the thirteen sample
 passages `--benchmark` walks:
 
 | passage | prompt tok | prefill tok/s | time to first token | decode tok/s | words |
 |---|---|---|---|---|---|
-| Hamlet · I.i.1-6 | 526 | 375 | 1.56 s | 140.8 | 100 |
-| Hamlet · I.v.88-91 | 680 | 1568 | 0.44 s | 138.6 | 149 |
-| Hamlet · II.ii.250-262 | 1006 | 1616 | 0.63 s | 133.4 | 133 |
-| Hamlet · III.i.62-96 | 1023 | 1642 | 0.64 s | 133.1 | 137 |
-| Hamlet · IV.iv.20-24 | 703 | 1611 | 0.44 s | 138.4 | 108 |
-| Hamlet · V.i.1-12 | 699 | 1618 | 0.44 s | 137.8 | 175 |
-| Macbeth · I.iii.38-48 | 768 | 1463 | 0.53 s | 137.4 | 140 |
-| Macbeth · II.iii.1-20 | 865 | 1588 | 0.56 s | 135.1 | 146 |
-| Macbeth · V.v.17-28 | 728 | 1564 | 0.47 s | 138.5 | 99 |
-| Macbeth · I.vii.1-28 | 832 | 1631 | 0.52 s | 135.1 | 190 |
+| Hamlet · I.i.1-6 | 526 | 1374 | 0.40 s | 140.2 | 108 |
+| Hamlet · I.v.88-91 | 680 | 1541 | 0.45 s | 138.2 | 116 |
+| Hamlet · II.ii.250-262 | 978 | 1550 | 0.64 s | 132.5 | 164 |
+| Hamlet · III.i.62-96 | 1023 | 1613 | 0.65 s | 131.2 | 176 |
+| Hamlet · IV.iv.20-24 | 703 | 1607 | 0.45 s | 136.3 | 116 |
+| Hamlet · V.i.1-12 | 699 | 1591 | 0.45 s | 136.5 | 166 |
+| Macbeth · I.iii.38-48 | 768 | 1622 | 0.48 s | 136.5 | 119 |
+| Macbeth · II.iii.1-20 | 865 | 1569 | 0.56 s | 133.6 | 166 |
+| Macbeth · V.v.17-28 | 710 | 1512 | 0.48 s | 136.0 | 105 |
+| Macbeth · I.vii.1-28 | 835 | 1396 | 0.61 s | 134.3 | 124 |
+| Romeo and Juliet · I.Pro.1-14 | 523 | 1435 | 0.37 s | 139.5 | 129 |
+| Romeo and Juliet · I.v.96-109 | 870 | 1537 | 0.58 s | 133.3 | 133 |
+| Romeo and Juliet · II.ii.1-10 | 557 | 1503 | 0.38 s | 137.6 | 113 |
 
-The first row is the first request of the process and includes warm-up; every row
-after it prefills at 1,460-1,640 tok/s. Peak memory 2.94 GB, resident around
-2.6-3 GB.
+Every row prefills at 1,370-1,620 tok/s, mean 1,527. Peak memory 2.98 GB, resident
+around 2.6-3 GB.
 
 **The ~200 tok/s prefill figure in `MuseGlimmerDemo/README.md` does not transfer.**
 That was a 30B MoE through a 52-layer stack; this is a 4B dense model prefilling
@@ -95,8 +97,8 @@ disappointed — preceding 15 lines → 8, personae limited to the selection, dr
 synopsis — and none of that was needed. At 0.5 s to first token the annotation
 appears about as fast as a footnote you look down at.
 
-Prompt length runs 526-1,023 tokens, mean 783 without a scene summary and roughly
-880 with one. Early modern verse runs about **1.4 Qwen3 tokens per word** — elisions
+Prompt length runs 523-1,023 tokens, mean 749 without a scene summary and roughly
+850 with one. Early modern verse runs about **1.4 Qwen3 tokens per word** — elisions
 (`o'er`, `on't`) and curly apostrophes split more than modern prose — so do not
 budget this at 0.75 words per token. `--show-prompt` prints the assembled prompt
 with its exact count from
@@ -106,14 +108,14 @@ with its exact count from
 
 The commentary, the follow-up list, and every tapped question share one
 `ChatSession` per passage, so the scene context is prefilled once. Turn 2 prefills
-250-351 tokens against a 526-1,023-token turn 1:
+259-366 tokens against a 523-1,023-token turn 1:
 
 | turn 1 prompt | commentary | turn 2 prompt |
 |---|---|---|
-| 526 | 100 words | 260 |
-| 728 | 99 words | 250 |
-| 1023 | 137 words | 300 |
-| 832 | 190 words | 351 |
+| 523 | 129 words | 295 |
+| 710 | 105 words | 259 |
+| 870 | 133 words | 294 |
+| 1023 | 176 words | 366 |
 
 Turn 2's cost tracks the **commentary length**, not the turn-1 prompt length: the
 600-900 token context block is reused, and what gets re-prefilled is the assistant's
@@ -127,8 +129,9 @@ A cache hit costs **1 ms** and no model work at all.
 
 ## What it does
 
-- **Corpus.** Hamlet and Macbeth, parsed from Project Gutenberg into checked-in JSON
-  by `tools/build_corpus.py`. Nothing at runtime depends on the script.
+- **Corpus.** Hamlet, Macbeth and Romeo and Juliet, parsed from Project Gutenberg
+  into checked-in JSON by `tools/build_corpus.py`. Nothing at runtime depends on the
+  script.
 - **Selection is a range of line indices**, not characters. SwiftUI's `Text` does not
   expose a selected character range, and a play is line-structured anyway — line
   numbers are what the context window, the cache key, and the citation are all built
@@ -164,8 +167,8 @@ A cache hit costs **1 ms** and no model work at all.
   rebuilt under a stored position keeps the scene and drops the highlight rather than
   putting it over different lines.
 
-Both plays are in the reader; the model has clearly read both of them before, which
-is worth remembering when judging output. `--model mlx-community/Qwen3-8B-4bit`
+All three plays are in the reader; the model has clearly read all of them before,
+which is worth remembering when judging output. `--model mlx-community/Qwen3-8B-4bit`
 swaps in a larger model for comparison — test that on a *deliberately obscure*
 passage, because "To be or not to be" is in every training corpus on earth and tells
 you nothing. For scale, `--model mlx-community/Qwen3-0.6B-4bit` prefills at 8,426
@@ -176,7 +179,7 @@ tok/s and decodes at 394 tok/s in 0.78 GB, and writes noticeably vaguer annotati
 ```bash
 python3 tools/build_corpus.py --all --out Sources/ShakespeareReader/Resources/Plays
 python3 tools/build_corpus.py --all --verify              # stats only, writes nothing
-python3 tools/build_corpus.py --slug hamlet --from-file /tmp/pg1524.txt --dump-scene 3.1
+python3 tools/build_corpus.py --slug romeo-and-juliet --from-file /tmp/pg1513.txt --dump-scene 1.0
 ```
 
 The generated JSON is **checked in**, so the app builds and runs with no network for
@@ -189,9 +192,12 @@ What the parse gets, measured on the real files and asserted by `--selftest`:
 |---|---|---|---|---|---|
 | Hamlet | 5 | 20 | 3,817 | 1,137 | 243 |
 | Macbeth | 5 | 28 | 2,329 | 649 | 168 |
+| Romeo and Juliet | 5 | 26 | 3,015 | 840 | 199 |
 
-0.00% of body lines are unclassified in either play, and every speech heading in the
-body produces a speech: 1,137 of 1,137 and 649 of 649.
+0.00% of body lines are unclassified in any of the three, and every speech heading in
+the body produces a speech: 1,137 of 1,137, 649 of 649, and 840 of 840. Romeo and
+Juliet's 26 scenes are 24 numbered ones plus 2 Chorus blocks, filed as scene 0 of the
+acts they open and labelled `Prologue` in the navigator.
 
 Details that decide the parser, all of them observed rather than assumed:
 
@@ -200,18 +206,20 @@ Details that decide the parser, all of them observed rather than assumed:
   carry a leading space.
 - **The Contents block cannot be skipped by column position.** Macbeth's Contents has
   `ACT I` at column 0, identical to its body header 85 lines later. The body scan is
-  anchored after the `Dramatis Personæ` line instead.
+  anchored after the `Dramatis Personæ` line instead, at the first act **or chorus**
+  header below it.
 - **Speakers are not gated on Dramatis Personæ.** The text has collective and
   numbered speakers that never appear there — `ALL.`, `BOTH MURDERERS.`, `DANES.`,
   `FIRST CLOWN.`, `APPARITION.` Gating would have silently dropped those speeches, so
   the pattern is accepted and `--verify` *reports* unresolved tokens instead of
-  failing on them (21 in Hamlet, 22 in Macbeth, all of them genuinely absent from the
-  personae list).
-- **A heading is not always one all-caps word.** Both plays share a line between
-  speakers (`HORATIO and MARCELLUS.`, `MACBETH, LENNOX.`), set three collectives in
-  title case (`All.`, `Both.`, `Danes.`), and drop the period off one `BARNARDO`. The
-  bare token is honoured only for a name already seen speaking, so the rule cannot
-  invent a speaker. Missing these is worse than it looks — see the next point.
+  failing on them (21 in Hamlet, 22 in Macbeth, 12 in Romeo and Juliet, all of them
+  genuinely absent from the personae list).
+- **A heading is not always one all-caps word.** Hamlet and Macbeth each share a line
+  between speakers (`HORATIO and MARCELLUS.`, `MACBETH, LENNOX.`), set three
+  collectives in title case (`All.`, `Both.`, `Danes.`), and drop the period off one
+  `BARNARDO`. The bare token is honoured only for a name already seen speaking, so the
+  rule cannot invent a speaker. Missing these is worse than it looks — see the next
+  point.
 - **A blank line does not close a speech.** The text interrupts a speech with a
   blank-delimited unbracketed direction (`Re-enter Ghost.`) and then resumes the
   *same* speech with no repeated heading. Clearing the speaker at a blank filed
@@ -230,13 +238,39 @@ Details that decide the parser, all of them observed rather than assumed:
   lines of "Is this a dagger" with it; the plural has to be spelled out for the
   reverse reason, since `Alarums. Enter Macduff.` is a direction.
 - **The PG footer has to be stripped.** Leave it in and `DAMAGE.` parses as a speaker
-  in both plays, from the license text.
+  in all three plays, from the license text.
 - **A bracketed aside can open a verse line.** `[_Aside._] A little more than kin,
   and less than kind.` Treating the whole line as a stage direction drops the verse
   entirely, which is what happened to 22 speeches in Hamlet and 4 in Macbeth before
   the leading-direction split existed — including that line and every one of
   Ophelia's `[_Sings._]` songs. Mid-line asides stay in the verse, because splitting
   those would fragment the line the reader selects.
+- **A chorus block has no scene header, and one of them sits outside its act.** Romeo
+  and Juliet's `THE PROLOGUE` is between `Dramatis Personæ` and `ACT I`; the Act II
+  Chorus is under `ACT II` but above `SCENE I.` Anchoring the body on the first act
+  header dropped "Two households, both alike in dignity" so completely it was not even
+  counted as unclassified, and the Act II sonnet was the entire 0.53% of body lines
+  this play used to leave unclassified: one sonnet, not noise. Both are now scene 0 of
+  the act they open, which the reader labels `Prologue` and cites `I.Pro.1-14`. The
+  Prologue is filed under Act I, as printed editions do, which is also why an `ACT`
+  header for the act already open is a no-op rather than a sixth act.
+- **A heading is not always on its own line.** Two lines in Romeo and Juliet put the
+  heading and its first verse line together: `ROMEO. Nurse, commend me to thy lady and
+  mistress.` and `THIRD WATCH. Here is a Friar that trembles, sighs, and weeps.` Both
+  were attributed to whoever spoke last, with the heading left sitting inside that
+  speaker's own text, and `THIRD WATCH` has no other heading anywhere in the play, so
+  the Watch's third man never entered the cast at all. The rule is tested only at the
+  start of a paragraph and after the scene header has had its turn, since `SCENE I. A
+  public place.` is the same shape.
+- **The direction vocabulary is per transcription, not per parser.** `DIRECTION_OPENERS`
+  had to grow two entries for Romeo and Juliet: ` Juliet appears above at a window.`,
+  which is the balcony scene's own direction and became Romeo's speech line 2 without
+  it, shifting every citation in II.ii by one; and ` Musicians waiting. Enter
+  Servants.` Both carry their second word deliberately. `Juliet` alone would take
+  `Juliet, the County stays.`, which is Lady Capulet's verse. `--verify` prints
+  `dir-shaped verse` for exactly this reason: the expected output is one line per play
+  (Ophelia's `The King rises.`, Siward's `Enter, sir, the castle.`, and nothing in
+  Romeo and Juliet), so a real direction read as verse shows up as a fourth.
 
 Line numbers are assigned **sequentially within each scene over speech lines only**.
 These are not Folger or Arden numbers — those count a verse line shared between two
@@ -276,7 +310,10 @@ kernels were never compiled; that failure otherwise waits for the first annotati
 contiguous per-scene numbering and the exact counts above; 14 `LineSelection` cases
 (shift-click backwards, drag reversal, double-click across an interleaved direction,
 clamping at scene edges); the on-stage scan against four real scenes that each broke a
-naive version of it; 11 follow-up parser cases; one **golden `PassageContext`
+naive version of it; the three Romeo and Juliet cases that guard the parser edits above
+(both Chorus blocks present as scene 0 with 14 `CHORUS` lines each and the right first
+line, the balcony direction sitting between verse lines 1 and 2, `THIRD WATCH` owning
+its recovered inline heading); 11 follow-up parser cases; one **golden `PassageContext`
 render** compared against a checked-in string, which is what catches prompt drift; and
 the typeface picker's inputs, including the CoreText italic probe that decides whether
 a stage direction gets a real italic cut or a synthetic one. A deliberate prompt change
@@ -320,7 +357,7 @@ prints the replacement.
   plausible-sounding etymology on an obscure word. The instructions tell it to say so
   rather than invent, ⌘R regenerates, and `--model` makes a larger comparison one
   flag. It also overshoots the 90-150 word rule on about a third of passages (up to
-  190 words); prompt iteration is where the remaining time would go.
+  176 words); prompt iteration is where the remaining time would go.
 - **Reader typefaces are what the system actually ships**, which is less than it looks.
   **Garamond is not installed on macOS** — it is a downloadable Apple font asset, so
   picking it runs `CTFontDescriptorMatchFontDescriptorsWithProgressHandler`, which
@@ -355,7 +392,8 @@ prints the replacement.
 
 ## Corpus provenance
 
-Hamlet is Project Gutenberg ebook 1524, Macbeth is 1533; both are public domain in
-the United States. Each JSON file records the ebook id, the URL, the retrieval date,
-and the SHA-256 of the source text as downloaded. See
-`Sources/ShakespeareReader/Resources/Plays/NOTICE.md`.
+Hamlet is Project Gutenberg ebook 1524, Macbeth is 1533, Romeo and Juliet is 1513;
+all three are public domain in the United States. Each JSON file records the ebook id,
+the URL, the retrieval date, and the SHA-256 of the source text as downloaded. See
+`Sources/ShakespeareReader/Resources/Plays/NOTICE.md`, which also records the scene-0
+decision behind the two Prologues.

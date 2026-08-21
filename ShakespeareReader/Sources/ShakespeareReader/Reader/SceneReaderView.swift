@@ -209,7 +209,7 @@ struct SceneReaderView: View {
             HStack(spacing: 6) {
                 Text("Act \(RomanNumeral.string(key.act))")
                 Text("·")
-                Text("Scene \(RomanNumeral.string(key.scene))")
+                Text(SceneLabel.string(key.scene))
             }
             .font(typeface.actSceneHeading)
             .tracking(typeface.actSceneTracking)

@@ -53,7 +53,7 @@ enum Prompts {
         blocks.append("PLAY: \(context.playTitle) by \(context.author)")
         blocks.append(
             "LOCATION: Act \(RomanNumeral.string(context.act)), "
-                + "Scene \(RomanNumeral.string(context.scene))")
+                + SceneLabel.string(context.scene))
         if let setting = context.setting {
             blocks.append("SETTING: \(setting)")
         }
@@ -266,7 +266,7 @@ enum Prompts {
         }
 
         return """
-            Act \(RomanNumeral.string(act)), Scene \(RomanNumeral.string(number))\
+            Act \(RomanNumeral.string(act)), \(SceneLabel.string(number))\
             \(scene.setting.isEmpty ? "" : " — \(scene.setting)")
 
             \(coverage):
