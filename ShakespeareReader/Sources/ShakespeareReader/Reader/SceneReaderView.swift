@@ -1,4 +1,4 @@
-import AppKit
+import Foundation
 import SwiftUI
 
 /// One scene, as a list of selectable lines.
@@ -39,6 +39,10 @@ struct SceneReaderView: View {
 
     @State private var rowFrames: [Int: CGRect] = [:]
     @State private var isDragging = false
+    /// The row a long press armed a sweep on, and the anchor the sweep extends from.
+    /// `nil` means no sweep is armed, which is every ordinary pan. iOS only; macOS
+    /// takes the drag bare and carries its anchor in `selectionDrag(from:)`.
+    @State private var sweepAnchor: Int?
     @State private var commitTask: Task<Void, Never>?
     @FocusState private var isFocused: Bool
 
@@ -65,8 +69,39 @@ struct SceneReaderView: View {
                     }
                     .padding(.vertical, 10)
                     .padding(.trailing, 12)
+                    #if !os(macOS)
+                    // Inside the scroll content on purpose: `SweepRecognizer` finds the
+                    // scroll view by walking up from here, and a background of the
+                    // `ScrollView` would sit outside it.
+                    .background {
+                        SweepRecognizer(
+                            onBegan: { point in
+                                guard let line = rowFrames.line(at: point) else { return }
+                                sweepAnchor = line
+                                extendDrag(from: line, to: point)
+                            },
+                            onChanged: { point in
+                                guard let sweepAnchor else { return }
+                                extendDrag(from: sweepAnchor, to: point)
+                            },
+                            onEnded: {
+                                sweepAnchor = nil
+                                if isDragging { endDrag() }
+                            }
+                        )
+                    }
+                    #endif
                 }
                 .coordinateSpace(name: Self.space)
+                #if !os(macOS)
+                // The other half of `SweepRecognizer`: it allows simultaneous
+                // recognition so it never inhibits the pan, which means once a sweep is
+                // under way the scroll view would otherwise still be panning under the
+                // finger doing it. macOS is left alone deliberately — there the wheel is
+                // not a `DragGesture`, so scrolling mid-drag is a feature rather than a
+                // collision.
+                .scrollDisabled(isDragging)
+                #endif
                 .onPreferenceChange(RowFramesKey.self) { rowFrames = $0 }
                 .onChange(of: scrollTarget) {
                     // Where an arrow move lands. Scrolling can only happen in here,
@@ -113,10 +148,19 @@ struct SceneReaderView: View {
                 .id(key)
             }
         }
+        // macOS only, and this is the whole reason the pane is focusable at all: the
+        // three responder-chain commands below are offered to the focused view. iOS has
+        // none of them, and asking for focus there had a visible cost. The reader view
+        // became first responder with no input view of its own, so the software keyboard
+        // rose over the bottom third of the play every time a `Menu` in the navigation
+        // bar opened. ⌘R still works with a hardware keyboard because it hangs off the
+        // `Button` below, which needs no focus.
+        #if os(macOS)
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
         .onAppear { isFocused = true }
+        #endif
         .onChange(of: key) {
             // This view now outlives the scene, so a commit scheduled for the line the
             // reader is leaving would land in a pane `ContentView` has just cleared for
@@ -124,22 +168,35 @@ struct SceneReaderView: View {
             // covers the navigator.
             commitTask?.cancel()
         }
+        .onChange(of: selection) {
+            // A selection cleared from *outside* this view, where the iPhone toolbar's
+            // Clear has no reach into `commitTask`, must take a pending commit with it or
+            // the debounce fires 350 ms later and glosses the passage that was just
+            // dismissed. Esc cancels explicitly as well, since that path wants the
+            // cancellation to be immediate rather than a change notification behind.
+            if selection == nil { commitTask?.cancel() }
+        }
         // Beside `.focusable()` and **not** on the `ScrollView` inside, where it used to
         // be and never fired: a command handler is offered to the focused view and then
         // to its ancestors, never to its descendants, so the arrows were dead even with
         // the pane focused while `.onExitCommand` here worked. Hence `scrollTarget`
         // rather than the proxy, which only exists inside the `ScrollViewReader`.
+        //
+        // macOS only, all three: these are responder-chain commands with no iOS
+        // equivalent. Their touch replacements are in `ContentView`'s reader toolbar
+        // (Clear, Copy) and in `selectionDrag(from:)` below.
+        #if os(macOS)
         .onMoveCommand { move($0) }
-        .onExitCommand {
-            commitTask?.cancel()
-            selection = nil
-            onCancel()
-        }
+        .onExitCommand { clearSelection() }
         .onCopyCommand { [copyItem()].compactMap { $0 } }
+        #endif
         .background {
             // Keyboard shortcuts need a control to hang off. Zero-opacity rather
             // than `.hidden()`, which removes it from the hierarchy along with its
             // shortcut.
+            //
+            // Kept on iOS too: it costs nothing and works with a hardware keyboard.
+            // The visible affordance there is the reader toolbar's Regenerate item.
             Button("Regenerate", action: onRegenerate)
                 .keyboardShortcut("r", modifiers: .command)
                 .opacity(0)
@@ -158,7 +215,7 @@ struct SceneReaderView: View {
             display: line.speaker.map(cast.display),
             isSelected: selection?.contains(index) ?? false,
             isFirstSelected: selection?.range.lowerBound == index,
-            hasFocus: isFocused
+            hasFocus: bandHasFocus
         )
         .reportRowFrame(index: index, space: Self.space)
         // The `count: 2` gesture must be attached *before* the `count: 1` gesture
@@ -169,38 +226,86 @@ struct SceneReaderView: View {
         .onTapGesture {
             // Read the modifiers synchronously from the event rather than through
             // `TapGesture().modifiers(.shift)`, which is unreliable here and would
-            // need a separate gesture per modifier.
-            if NSEvent.modifierFlags.contains(.shift), var extended = selection {
+            // need a separate gesture per modifier. Always false on iOS, where the
+            // long press in `selectionDrag(from:)` is what extends a selection.
+            if isShiftKeyDown, var extended = selection {
                 extended.extend(to: index)
                 select(extended)
             } else {
                 select(LineSelection(at: index))
             }
         }
-        // Attached per row so the anchor is this row's own index; only the head
-        // has to be hit-tested through `rowFrames`. No edge auto-scroll: on macOS
-        // the scroll wheel and two-finger scroll are not `DragGesture` events, so
-        // the reader can scroll mid-drag without the drag noticing.
-        .gesture(
-            DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
-                .onChanged { value in
-                    if !isDragging {
-                        isDragging = true
-                        selection = LineSelection(at: index)
-                        // Same reason as `select(_:)`: the pane has to hold the
-                        // keyboard for the arrows to keep working after a drag.
-                        // Inside the guard, because `onChanged` runs per event and
-                        // focus is not worth re-requesting at frame rate.
-                        isFocused = true
-                    }
-                    let head = rowFrames.line(at: value.location) ?? index
-                    selection?.extend(to: head)
-                }
-                .onEnded { _ in
-                    isDragging = false
-                    if let selection { scheduleCommit(selection, from: .pointer) }
-                }
-        )
+        #if os(macOS)
+        .gesture(selectionDrag(from: index))
+        #endif
+        // iOS attaches nothing here. A `DragGesture` on these rows, in any shape, stops
+        // the scene from scrolling; the touch equivalent of the sweep is the
+        // `SweepRecognizer` on the scroll view instead. See its own note.
+    }
+
+    /// Whether the selection band should draw as though the pane holds the keyboard.
+    ///
+    /// `.focusable()` never becomes focused on a phone with no hardware keyboard, so
+    /// the band would render in the unfocused grey for good. That grey means "the
+    /// arrows are pointed somewhere else", and on a touch device there is nowhere else
+    /// for them to point.
+    private var bandHasFocus: Bool {
+        #if os(macOS)
+        isFocused
+        #else
+        true
+        #endif
+    }
+
+    /// Sweeping a range of lines out with the pointer.
+    ///
+    /// Attached per row so the anchor is this row's own index; only the head has to be
+    /// hit-tested through `rowFrames`. No edge auto-scroll: on macOS the scroll wheel
+    /// and two-finger scroll are not `DragGesture` events, so the reader can scroll
+    /// mid-drag without the drag noticing.
+    ///
+    /// That same fact is why macOS can take the drag bare and iOS cannot. A touch pan
+    /// *is* a `DragGesture`, so a bare `minimumDistance: 4` on every row would win the
+    /// vertical gesture against the enclosing `ScrollView` and the scene would not
+    /// scroll at all. Sequencing it behind a long press is what makes
+    /// press-and-hold-then-drag the touch affordance that replaces shift-click, but it
+    /// is *not* what gives the pan back: see the note at the attachment site, which is
+    /// simultaneous for that reason.
+    ///
+    /// Sweeping a range of lines out with the pointer. macOS only — the touch
+    /// equivalent is the pair of simultaneous gestures at the attachment site, which a
+    /// sequenced gesture cannot do without taking the scroll view's pan with it.
+    ///
+    /// Attached per row so the anchor is this row's own index; only the head has to be
+    /// hit-tested through `rowFrames`. No edge auto-scroll: on macOS the scroll wheel
+    /// and two-finger scroll are not `DragGesture` events, so the reader can scroll
+    /// mid-drag without the drag noticing. That same fact is why macOS can take the
+    /// drag bare and iOS cannot: a touch pan *is* a `DragGesture`.
+    #if os(macOS)
+    private func selectionDrag(from index: Int) -> some Gesture {
+        DragGesture(minimumDistance: 4, coordinateSpace: .named(Self.space))
+            .onChanged { extendDrag(from: index, to: $0.location) }
+            .onEnded { _ in endDrag() }
+    }
+    #endif
+
+    /// The head of a drag moved. `index` is the row the gesture started on, which is
+    /// the anchor, and `location` is hit-tested against `rowFrames` for the head.
+    private func extendDrag(from index: Int, to location: CGPoint) {
+        if !isDragging {
+            isDragging = true
+            selection = LineSelection(at: index)
+            // Same reason as `select(_:)`: the pane has to hold the keyboard for the
+            // arrows to keep working after a drag. Inside the guard, because this runs
+            // per event and focus is not worth re-requesting at frame rate.
+            isFocused = true
+        }
+        selection?.extend(to: rowFrames.line(at: location) ?? index)
+    }
+
+    private func endDrag() {
+        isDragging = false
+        if let selection { scheduleCommit(selection, from: .pointer) }
     }
 
     @ViewBuilder
@@ -249,6 +354,11 @@ struct SceneReaderView: View {
         }
     }
 
+    /// Where an arrow key lands. macOS only: `MoveCommandDirection` is not available on
+    /// iOS at all, and `.onMoveCommand`, its only caller, is not either. A hardware
+    /// keyboard attached to a phone therefore does not move the selection. The touch
+    /// equivalents are tap and press-and-hold-then-drag.
+    #if os(macOS)
     private func move(_ direction: MoveCommandDirection) {
         let step: Int
         switch direction {
@@ -259,7 +369,7 @@ struct SceneReaderView: View {
 
         // Read the modifiers from the event for the same reason the click path does at
         // `row(index:line:)`: SwiftUI does not report them on a move command.
-        let extending = NSEvent.modifierFlags.contains(.shift)
+        let extending = isShiftKeyDown
         guard
             let next = LineSelection.moved(
                 from: selection, by: step, extending: extending, in: scene.lines)
@@ -277,25 +387,28 @@ struct SceneReaderView: View {
         scrollTarget = next.head
         scheduleCommit(next, from: .keyboard)
     }
+    #endif
 
     // MARK: - Copy
 
-    /// The selected lines with the citation appended, which is what makes a quote
-    /// pasted into notes traceable.
+    /// Esc, and the reader toolbar's Clear on iOS.
+    private func clearSelection() {
+        commitTask?.cancel()
+        selection = nil
+        onCancel()
+    }
+
+    #if os(macOS)
+    /// The selected lines with the citation appended, wrapped for the responder
+    /// chain. iOS copies the same string through `UIPasteboard` from
+    /// `ContentView`'s reader toolbar, since `.onCopyCommand` has no counterpart
+    /// there.
     private func copyItem() -> NSItemProvider? {
         guard let selection, let range = selection.clamped(to: scene.lines)?.range
         else { return nil }
-
-        var text = scene.lines[range]
-            .map { line -> String in
-                if line.isDirection {
-                    return "[\(line.plainText)]"
-                }
-                return line.startsSpeech && line.speaker != nil
-                    ? "\(line.speaker!). \(line.text)" : line.text
-            }
-            .joined(separator: "\n")
-        text += "\n\n" + Citation.string(play: play, key: key, scene: scene, range: range)
+        let text = Citation.quotation(
+            play: play, key: key, scene: scene, range: range)
         return NSItemProvider(object: text as NSString)
     }
+    #endif
 }

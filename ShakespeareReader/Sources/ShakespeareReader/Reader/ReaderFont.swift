@@ -1,6 +1,11 @@
-import AppKit
 import CoreText
 import SwiftUI
+
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// The face the play text is set in.
 ///
@@ -18,8 +23,33 @@ import SwiftUI
 ///   italic, and colour carry the hierarchy instead.
 /// - **Garamond is not installed.** It is in Apple's downloadable font asset
 ///   catalog, which `ReaderFontLibrary` fetches on demand.
+///
+/// iOS ships a different set, which is why `offered` exists rather than
+/// `allCases`: of the three named faces above only Baskerville is there, Big Caslon
+/// has no iOS counterpart at all, and Garamond is not in an iOS downloadable font
+/// catalog. Hoefler Text and Palatino take their places, and both were picked from the
+/// runtime's `System/Library/Fonts/AppFonts`, which is the set actually exposed to
+/// apps, and the reason Iowan Old Style is not here. It was the obvious third choice,
+/// it ships with iOS, and `CTFontManagerCopyAvailableFontFamilyNames` does not return
+/// it, so the row rendered in SF and offered a download that does not exist.
+///
+/// The cases are *not* renamed per platform. An honest family name beats a silent
+/// substitution, and a `readerFont` of `caslon` carried over from a Mac stays safe
+/// because `ReaderTypeface.init` falls back to the system face for a family that is
+/// not installed.
 enum ReaderFont: String, CaseIterable, Sendable {
-    case system, caslon, baskerville, garamond
+    case system, caslon, baskerville, garamond, hoeflerText, palatino
+
+    /// What the typeface menu lists, which is only the families the running platform
+    /// can actually resolve. `allCases` stays the full set, because it is also the
+    /// decoding surface for a stored preference written on the other platform.
+    static var offered: [ReaderFont] {
+        #if os(macOS)
+        [.system, .caslon, .baskerville, .garamond]
+        #else
+        [.system, .baskerville, .hoeflerText, .palatino]
+        #endif
+    }
 
     var displayName: String {
         switch self {
@@ -27,6 +57,8 @@ enum ReaderFont: String, CaseIterable, Sendable {
         case .caslon: "Caslon"
         case .baskerville: "Baskerville"
         case .garamond: "Garamond"
+        case .hoeflerText: "Hoefler Text"
+        case .palatino: "Palatino"
         }
     }
 
@@ -39,6 +71,8 @@ enum ReaderFont: String, CaseIterable, Sendable {
         case .caslon: "Big Caslon"
         case .baskerville: "Baskerville"
         case .garamond: "Garamond"
+        case .hoeflerText: "Hoefler Text"
+        case .palatino: "Palatino"
         }
     }
 
@@ -47,12 +81,16 @@ enum ReaderFont: String, CaseIterable, Sendable {
     /// Per family, not one constant. Baskerville and Garamond both set noticeably
     /// smaller than SF at the same point size and need the same lift. Big Caslon is
     /// a display cut with a large x-height and would read *bigger*, not equal, if it
-    /// were scaled with them.
+    /// were scaled with them. Hoefler Text is a text cut with a small x-height and
+    /// wants nearly as much lift as Baskerville; Palatino has a large x-height and
+    /// needs less.
     var opticalScale: CGFloat {
         switch self {
         case .system: 1.00
         case .caslon: 1.07
         case .baskerville, .garamond: 1.15
+        case .hoeflerText: 1.10
+        case .palatino: 1.05
         }
     }
 
@@ -78,13 +116,31 @@ enum ReaderFont: String, CaseIterable, Sendable {
     }
 
     /// The system's own point size for a text style, which is what a custom face has
-    /// to be scaled against. Callable off the main actor: `NSFont` itself is not
-    /// isolated, only `NSFontManager` is.
+    /// to be scaled against. Callable off the main actor: neither `NSFont` nor
+    /// `UIFont` is isolated, only `NSFontManager` is.
+    ///
+    /// Asked for **at `.large`** rather than at the current content size category,
+    /// which is the whole reason this is not a one-liner. `custom(_:_:)` below hands
+    /// the result to `Font.custom(_:size:relativeTo:)`, which scales it by the ratio
+    /// of the current dynamic type size to `.large`, so a size that already had
+    /// Dynamic Type applied would be scaled by it twice. macOS never notices, being
+    /// pinned at `.large`; on iOS, where Dynamic Type is live, it is the difference
+    /// between the verse growing once and growing quadratically.
     fileprivate static func systemSize(_ style: Font.TextStyle) -> CGFloat {
-        NSFont.preferredFont(forTextStyle: nsStyle(style), options: [:]).pointSize
+        #if os(macOS)
+        PlatformFont.preferredFont(forTextStyle: platformStyle(style), options: [:])
+            .pointSize
+        #else
+        PlatformFont.preferredFont(
+            forTextStyle: platformStyle(style),
+            compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)
+        ).pointSize
+        #endif
     }
 
-    private static func nsStyle(_ style: Font.TextStyle) -> NSFont.TextStyle {
+    /// `NSFont.TextStyle` and `UIFont.TextStyle` spell every case the same, so this
+    /// mapping is written once against `PlatformFont`.
+    private static func platformStyle(_ style: Font.TextStyle) -> PlatformFont.TextStyle {
         switch style {
         case .largeTitle: .largeTitle
         case .title: .title1
@@ -195,15 +251,16 @@ struct ReaderTypeface: Equatable, Sendable {
         (ReaderFont.systemSize(style) * scale).rounded()
     }
 
-    /// `relativeTo:` is correct here and does not double-scale: it multiplies by the
-    /// ratio of the current dynamic type size to `.large`, and macOS is pinned at
-    /// `.large` unless something calls `.dynamicTypeSize()`, which nothing here
-    /// does.
+    /// `relativeTo:` is what makes the verse follow Dynamic Type, and it does not
+    /// double-scale *because* `systemSize(_:)` is measured at `.large`. See the note
+    /// there, which is the load-bearing half of this pair.
     private func custom(_ family: String, _ style: Font.TextStyle) -> Font {
         .custom(family, size: size(style), relativeTo: style)
     }
 
-    /// A synthetic italic for a family with no italic cut, which is Big Caslon.
+    /// A synthetic italic for a family with no italic cut, which is Big Caslon,
+    /// and only Big Caslon: Baskerville, Garamond, Hoefler Text and Palatino
+    /// all ship real italics, so `hasItalicFace` keeps them out of here.
     ///
     /// The shear sits in the matrix's `c` slot only, so advance widths are untouched
     /// and a stage direction wraps exactly where its upright twin would. The size

@@ -5,4 +5,15 @@
 # `.upToNextMinor`, so without the lockfile two builds of the same tag can
 # resolve different versions. The Homebrew formula builds from source, which
 # makes the user's resolution the release: it has to be pinned.
+#
+# This also un-ignores the iOS app's own lockfile at
+# App/ShakespeareReader.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/,
+# which is wanted for the same reason. `xcuserdata/` needs no entry here: the
+# root .gitignore already matches it at any depth, which covers the per-user
+# scheme and window state Xcode writes beside the project.
 !Package.resolved
+
+# Your Apple Developer team id, for signing the iOS app. `App/Signing.xcconfig` is
+# tracked and includes this one optionally, so a clone builds with no team set and
+# nobody inherits anyone else's. See the comment in that file.
+App/Local.xcconfig

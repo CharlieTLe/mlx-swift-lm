@@ -115,6 +115,13 @@ struct AnnotationPaneView: View {
                 )
             }
             .coordinateSpace(name: Self.space)
+            // The pane is an inspector *sheet* on a phone, so the keyboard the Ask
+            // Anything field raises covers the answer it was typed against. Dragging
+            // the text down is then the way back, and without this there is none: the
+            // sheet has no other empty region to tap.
+            #if !os(macOS)
+            .scrollDismissesKeyboard(.interactively)
+            #endif
             .background(
                 GeometryReader { geometry in
                     Color.clear.preference(
@@ -251,9 +258,10 @@ struct AnnotationPaneView: View {
             if synopsisIsPartial {
                 Label(
                     "Scene summary covers the first part of this scene only.",
-                    systemImage: "info.circle")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    systemImage: "info.circle"
+                )
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
             }
         }
     }
@@ -263,13 +271,25 @@ struct AnnotationPaneView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Select lines to annotate")
                 .font(.headline)
-            Text(
-                "Click a line, shift-click to extend, double-click for the whole "
-                    + "speech, or drag. Esc clears. ⌘R regenerates.")
+            Text(instructions)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Named after the gestures each platform actually has. Esc, ⌘R and shift-click
+    /// are macOS instructions, and telling a phone reader about them would be telling
+    /// them about keys they do not have; press-and-hold is the touch equivalent of
+    /// shift-click, and dismissing this sheet is the equivalent of Esc.
+    private var instructions: String {
+        #if os(macOS)
+        "Click a line, shift-click to extend, double-click for the whole "
+            + "speech, or drag. Esc clears. ⌘R regenerates."
+        #else
+        "Tap a line, double-tap for the whole speech, or press and hold to "
+            + "select a passage."
+        #endif
     }
 
     /// Full-width vertical rows with a chevron and dividers, which is what the
@@ -321,16 +341,24 @@ struct AnnotationPaneView: View {
                     .font(.callout)
                     .focused($isDraftFocused)
                     .onSubmit { submitDraft() }
+                    // Return sends rather than inserting a newline, which the software
+                    // keyboard has to be told: without it the key reads "return" and a
+                    // reader has no reason to expect it to submit.
+                    #if !os(macOS)
+                .submitLabel(.send)
+                    #endif
                     // Esc belongs to the field while it holds the keyboard: it
                     // abandons the draft. It does not reach
                     // `SceneReaderView.onExitCommand`, which would clear the selection
                     // and wipe the pane the draft was written against — the pane is
                     // that view's sibling, not its descendant, and commands only
                     // travel to ancestors.
-                    .onExitCommand {
-                        draft = ""
-                        isDraftFocused = false
-                    }
+                    #if os(macOS)
+                .onExitCommand {
+                    draft = ""
+                    isDraftFocused = false
+                }
+                #endif
 
                 if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(action: submitDraft) {

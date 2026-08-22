@@ -1,4 +1,3 @@
-import AppKit
 import MLXLLM
 import MLXLMCommon
 import SwiftUI
@@ -65,110 +64,232 @@ struct ContentView: View {
     }
 
     var body: some View {
+        layout
+            .task {
+                loadCorpus()
+                await service.load()
+                if let corpus, let sceneKey, let scene = corpus.scene(sceneKey) {
+                    service.rememberSceneForPrewarm(key: sceneKey, scene: scene)
+                    if showsCommentary {
+                        service.prewarmSynopsis(key: sceneKey, scene: scene)
+                    }
+                }
+            }
+            // Recorded here rather than inside `openScene(_:in:)`, so every path that
+            // moves the reader is caught, including an arrow-key move, which comes back
+            // through `SceneReaderView`'s `$selection` binding and never calls it. No
+            // debounce: CFPreferences coalesces writes, so a held arrow key is not a
+            // per-keypress disk hit.
+            .onChange(of: sceneKey) { recordProgress() }
+            .onChange(of: selection) { recordProgress() }
+            .onChange(of: collapsedActs) {
+                ProgressStore.save(collapsedActs: collapsedActs)
+            }
+    }
+
+    // MARK: - Layout
+
+    /// The one place the two platforms genuinely diverge. Both branches build their
+    /// panes from the same three `@ViewBuilder` helpers below, so what differs here is
+    /// the *container* and nothing else: a Mac shows all three at once, a phone shows
+    /// one at a time and raises the commentary over the verse.
+    @ViewBuilder
+    private var layout: some View {
+        #if os(macOS)
         VStack(spacing: 0) {
             header
             Divider()
+            desktopPanes
+        }
+        #else
+        phonePanes
+        #endif
+    }
 
-            if let corpus, let sceneKey, let scene = corpus.scene(sceneKey),
-                let play = corpus.play(sceneKey.playID)
-            {
-                // The side panes are fixed widths, and that is what keeps the navigator
-                // still. `HSplitView` distributes width from each child's min / ideal /
-                // max, and it will move *any* pane that has room between them: a `maxWidth`
-                // caps how far a pane can grow but leaves it just as free to be shrunk. So
-                // a navigator declared 180…320 gets squeezed whenever the split view is
-                // over-subscribed, and it is over-subscribed exactly when the middle pane's
-                // reported ideal grows — which happens on every scene change, since
-                // `SceneReaderView` is a fresh identity per scene whose heading is as wide
-                // as the setting string. Pinning the sides leaves the reader as the only
-                // pane with any give, so it absorbs the whole difference and the dividers
-                // never move. Giving either side a width *range* hands that pane back to
-                // the split view and the drift returns.
-                //
-                // The cost is that the dividers are no longer draggable. 210 + 380 here
-                // plus the reader's 420 floor is the 1010 that sets the window minimum in
-                // `ShakespeareReaderApp`.
-                HSplitView {
-                    if showsNavigator {
-                        NavigatorView(
-                            corpus: corpus,
-                            key: Binding(
-                                get: { sceneKey }, set: { openScene($0, in: corpus) }),
-                            collapsed: $collapsedActs
-                        )
+    #if os(macOS)
+    @ViewBuilder
+    private var desktopPanes: some View {
+        if let corpus, let sceneKey, let scene = corpus.scene(sceneKey),
+            let play = corpus.play(sceneKey.playID)
+        {
+            // The side panes are fixed widths, and that is what keeps the navigator
+            // still. `HSplitView` distributes width from each child's min / ideal /
+            // max, and it will move *any* pane that has room between them: a `maxWidth`
+            // caps how far a pane can grow but leaves it just as free to be shrunk. So
+            // a navigator declared 180…320 gets squeezed whenever the split view is
+            // over-subscribed, and it is over-subscribed exactly when the middle pane's
+            // reported ideal grows — which happens on every scene change, since
+            // `SceneReaderView` is a fresh identity per scene whose heading is as wide
+            // as the setting string. Pinning the sides leaves the reader as the only
+            // pane with any give, so it absorbs the whole difference and the dividers
+            // never move. Giving either side a width *range* hands that pane back to
+            // the split view and the drift returns.
+            //
+            // The cost is that the dividers are no longer draggable. 210 + 380 here
+            // plus the reader's 420 floor is the 1010 that sets the window minimum in
+            // `ShakespeareReaderApp`.
+            HSplitView {
+                if showsNavigator {
+                    navigatorPane(corpus: corpus, key: sceneKey)
                         .frame(width: 210)
-                    }
+                }
 
-                    SceneReaderView(
-                        play: play, key: sceneKey, scene: scene,
-                        cast: cast(for: play),
-                        selection: $selection,
-                        onCommit: { selection, origin in
-                            commit(
-                                selection, play: play, key: sceneKey, scene: scene,
-                                revealingCommentary: origin == .pointer)
-                        },
-                        onCancel: { cancel() },
-                        onRegenerate: { regenerate() },
-                        onStepScene: { step in stepScene(step, in: corpus) }
-                    )
+                readerPane(corpus: corpus, play: play, key: sceneKey, scene: scene)
                     // The only pane with any flexibility, so every width change lands
                     // here. The explicit `idealWidth` keeps the scene heading from
                     // proposing the window's preferred width: without one this frame
                     // propagates the child's own ideal, which is the full single-line
                     // width of whichever setting string happens to be on screen.
                     .frame(minWidth: 420, idealWidth: 640, maxWidth: .infinity)
-                    .environment(\.readerTypeface, fonts.typeface(for: readerFont))
 
-                    if showsCommentary {
-                        VStack(spacing: 0) {
-                            AnnotationPaneView(
-                                citation: context?.citation,
-                                selectedLines: context?.selected ?? [],
-                                commentary: commentary,
-                                followUps: followUps,
-                                transcript: transcript,
-                                isBusy: isBusy,
-                                synopsisIsPartial: context?.synopsisIsPartial ?? false,
-                                onAsk: ask)
-                            // Both go together: a divider with nothing under it would
-                            // leave an empty band at the foot of the pane.
-                            if showsDiagnostics || errorMessage != nil {
-                                Divider()
-                                statusStrip
-                            }
-                        }
-                        .frame(width: 380)
-                    }
-                }
-            } else if let corpusError {
-                failure(corpusError)
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task {
-            loadCorpus()
-            await service.load()
-            if let corpus, let sceneKey, let scene = corpus.scene(sceneKey) {
-                service.rememberSceneForPrewarm(key: sceneKey, scene: scene)
                 if showsCommentary {
-                    service.prewarmSynopsis(key: sceneKey, scene: scene)
+                    commentaryPane().frame(width: 380)
+                }
+            }
+        } else if let corpusError {
+            failure(corpusError)
+        } else {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+    #else
+    /// Navigator and reader as the two columns of a `NavigationSplitView`, which an
+    /// iPhone always renders collapsed, so it is a push from the scene list to the
+    /// reader, with the system's own back button standing in for ⌘1.
+    ///
+    /// The commentary is an `.inspector` specifically because that container
+    /// auto-presents as a **sheet** at this size class: the verse stays on screen
+    /// above the gloss, which is the whole point of the three-pane desktop layout
+    /// and the one part of it worth keeping on a phone.
+    @ViewBuilder
+    private var phonePanes: some View {
+        NavigationSplitView(columnVisibility: navigatorVisibility) {
+            Group {
+                if let corpus, let sceneKey {
+                    navigatorPane(corpus: corpus, key: sceneKey)
+                } else if let corpusError {
+                    failure(corpusError)
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle("Plays")
+        } detail: {
+            Group {
+                if let corpus, let sceneKey, let scene = corpus.scene(sceneKey),
+                    let play = corpus.play(sceneKey.playID)
+                {
+                    readerPane(
+                        corpus: corpus, play: play, key: sceneKey, scene: scene
+                    )
+                    .navigationTitle(play.title)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { readerToolbar }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
-        // Recorded here rather than inside `openScene(_:in:)`, so every path that
-        // moves the reader is caught, including an arrow-key move, which comes back
-        // through `SceneReaderView`'s `$selection` binding and never calls it. No
-        // debounce: CFPreferences coalesces writes, so a held arrow key is not a
-        // per-keypress disk hit.
-        .onChange(of: sceneKey) { recordProgress() }
-        .onChange(of: selection) { recordProgress() }
-        .onChange(of: collapsedActs) { ProgressStore.save(collapsedActs: collapsedActs) }
+        // Presented by *having a gloss*, not by the `showsCommentary` preference.
+        //
+        // On a Mac that preference is a layout question (is the third pane on screen)
+        // and the reader answers it once. On a phone the pane is a sheet over the verse,
+        // so "is it up" is not a preference at all but a moment: it rises when a passage
+        // is glossed and it is done when the reader swipes it away. Binding it to the
+        // stored preference instead put the placeholder sheet over the play on first
+        // launch, before anything had been selected.
+        //
+        // Dismissing calls `cancel()`, which is Esc's behaviour minus clearing the
+        // selection, so a gloss nobody will read stops generating. It deliberately does
+        // *not* write `showsCommentary`: that flag still gates `commit(_:)` and the
+        // scene-summary prewarm, and turning it off here would quietly stop both for
+        // the rest of the session.
+        .inspector(
+            isPresented: Binding(
+                get: { context != nil }, set: { if !$0 { cancel() } })
+        ) {
+            commentaryPane()
+        }
+    }
+
+    /// The persisted navigator preference, in the shape `NavigationSplitView` wants.
+    /// Reused rather than duplicated: collapsed, the split view writes `.detailOnly`
+    /// on a push and `.all` on a pop, so "was I reading or browsing" survives a
+    /// relaunch off the same key the Mac uses.
+    private var navigatorVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { showsNavigator ? .all : .detailOnly },
+            set: { showsNavigator = $0 != .detailOnly })
+    }
+    #endif
+
+    // MARK: - Panes
+
+    @ViewBuilder
+    private func navigatorPane(corpus: Corpus, key: SceneKey) -> some View {
+        NavigatorView(
+            corpus: corpus,
+            key: Binding(get: { key }, set: { openScene($0, in: corpus) }),
+            collapsed: $collapsedActs)
+    }
+
+    @ViewBuilder
+    private func readerPane(corpus: Corpus, play: Play, key: SceneKey, scene: Scene)
+        -> some View
+    {
+        SceneReaderView(
+            play: play, key: key, scene: scene,
+            cast: cast(for: play),
+            selection: $selection,
+            onCommit: { selection, origin in
+                commit(
+                    selection, play: play, key: key, scene: scene,
+                    revealingCommentary: origin == .pointer)
+            },
+            onCancel: { cancel() },
+            onRegenerate: { regenerate() },
+            onStepScene: { step in stepScene(step, in: corpus) }
+        )
+        .environment(\.readerTypeface, fonts.typeface(for: readerFont))
+    }
+
+    @ViewBuilder
+    private func commentaryPane() -> some View {
+        VStack(spacing: 0) {
+            AnnotationPaneView(
+                citation: context?.citation,
+                selectedLines: context?.selected ?? [],
+                commentary: commentary,
+                followUps: followUps,
+                transcript: transcript,
+                isBusy: isBusy,
+                synopsisIsPartial: context?.synopsisIsPartial ?? false,
+                onAsk: ask)
+            // Both go together: a divider with nothing under it would
+            // leave an empty band at the foot of the pane.
+            if showsDiagnostics || errorMessage != nil {
+                Divider()
+                statusStrip
+            }
+        }
+        // Half height by default, which is the entire reason the commentary is an
+        // `.inspector` rather than a plain `.sheet`: at `.medium` the verse is still on
+        // screen above the gloss, which is what the third pane does on a Mac. Without
+        // these the inspector presents at full height on a phone and the passage being
+        // annotated disappears behind its own annotation.
+        //
+        // `presentationBackgroundInteraction` is the other half: at `.medium` the reader
+        // can tap the next line without dismissing the sheet first, so moving through a
+        // scene stays one tap per passage the way it is on a Mac.
+        #if !os(macOS)
+        .presentationDetents([.medium, .large])
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        #endif
     }
 
     // MARK: - Header
 
+    #if os(macOS)
     @ViewBuilder
     private var header: some View {
         HStack(spacing: 10) {
@@ -191,40 +312,7 @@ struct ContentView: View {
 
             Spacer()
 
-            switch service.loadState {
-            case .idle:
-                if showsDiagnostics {
-                    Text("Idle").foregroundStyle(.secondary).font(.caption)
-                }
-            case .loading(let progress):
-                // Never hidden: the first launch downloads gigabytes, and an app that
-                // says nothing while it does looks broken.
-                HStack(spacing: 6) {
-                    if let progress, progress.totalUnitCount > 0 {
-                        ProgressView(value: progress.fractionCompleted)
-                            .frame(width: 120)
-                        Text("\(Int(progress.fractionCompleted * 100))%")
-                            .font(.caption.monospacedDigit())
-                    } else {
-                        ProgressView().controlSize(.small)
-                        Text("Loading…").font(.caption)
-                    }
-                }
-                .foregroundStyle(.secondary)
-            case .ready:
-                if showsDiagnostics {
-                    Label("Ready", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                }
-            case .failed(let message):
-                // Also never hidden: without this the reader gets a play that silently
-                // refuses to annotate anything.
-                Label("Load failed", systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .help(message)
-            }
+            loadStateIndicator
 
             diagnosticsMenu
 
@@ -237,6 +325,109 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+    #else
+    /// The header's controls, in a navigation bar instead.
+    ///
+    /// The header's controls, in a navigation bar instead.
+    ///
+    /// Both `paneToggle`s are gone. The split view's own back button is ⌘1, and there is
+    /// nothing for ⌘2 to toggle: the gloss sheet rises when a passage is selected and
+    /// closes when it is swiped away, so a button that claimed to show or hide it would
+    /// be lying about a preference the phone does not keep. Regenerate, Copy and Clear
+    /// move into the overflow menu because ⌘R, ⌘C and Esc are not keys a phone has, and
+    /// they are the reason this file, not `SceneReaderView`, owns that menu: the
+    /// selection they act on lives here.
+    @ToolbarContentBuilder
+    private var readerToolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            loadStateIndicator
+            typefaceMenu
+            overflowMenu
+        }
+    }
+
+    @ViewBuilder
+    private var overflowMenu: some View {
+        Menu {
+            Button("Regenerate", systemImage: "arrow.clockwise") { regenerate() }
+                .disabled(selection == nil || isBusy)
+            Button("Copy passage", systemImage: "doc.on.doc") { copySelection() }
+                .disabled(selection == nil)
+            Button("Clear selection", systemImage: "xmark") { clearSelection() }
+                .disabled(selection == nil)
+            Divider()
+            Toggle("Show diagnostics", isOn: $diagnosticsPreference)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .borderlessMenu()
+        .accessibilityLabel("More")
+    }
+
+    /// ⌘C's counterpart. `SceneReaderView` cannot own this the way it owns
+    /// `copyItem()`: the menu is in the navigation bar, which is this view's.
+    private func copySelection() {
+        guard let corpus, let sceneKey, let selection,
+            let play = corpus.play(sceneKey.playID),
+            let scene = corpus.scene(sceneKey),
+            let range = selection.clamped(to: scene.lines)?.range
+        else { return }
+        copyToPasteboard(
+            Citation.quotation(play: play, key: sceneKey, scene: scene, range: range))
+    }
+
+    /// Esc's counterpart. `SceneReaderView` cancels its own pending commit off the
+    /// `selection` change, so clearing it from out here is enough.
+    private func clearSelection() {
+        selection = nil
+        cancel()
+    }
+    #endif
+
+    /// Where the model is, on both platforms. The first launch downloads gigabytes and
+    /// an app that says nothing while it does looks broken, so the loading and failed
+    /// states are never hidden by the diagnostics preference; idle and ready are noise
+    /// and are.
+    @ViewBuilder
+    private var loadStateIndicator: some View {
+        switch service.loadState {
+        case .idle:
+            if showsDiagnostics {
+                Text("Idle").foregroundStyle(.secondary).font(.caption)
+            }
+        case .loading(let progress):
+            HStack(spacing: 6) {
+                if let progress, progress.totalUnitCount > 0 {
+                    // The determinate bar is macOS only. A navigation bar already
+                    // holds three controls at this point and has no 120 points to
+                    // spare; the percentage alone carries the same information.
+                    #if os(macOS)
+                    ProgressView(value: progress.fractionCompleted)
+                        .frame(width: 120)
+                    #endif
+                    Text("\(Int(progress.fractionCompleted * 100))%")
+                        .font(.caption.monospacedDigit())
+                } else {
+                    ProgressView().controlSize(.small)
+                    Text("Loading…").font(.caption)
+                }
+            }
+            .foregroundStyle(.secondary)
+        case .ready:
+            if showsDiagnostics {
+                Label("Ready", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        case .failed(let message):
+            // Also never hidden: without this the reader gets a play that silently
+            // refuses to annotate anything.
+            Label("Load failed", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+                .help(message)
+        }
     }
 
     /// The face the play is set in. Sits with the reader's own controls rather than
@@ -260,7 +451,9 @@ struct ContentView: View {
     @ViewBuilder
     private var typefaceMenu: some View {
         Menu {
-            ForEach(ReaderFont.allCases, id: \.self) { font in
+            // `offered`, not `allCases`: the two iOS-only families would be dead rows
+            // on a Mac and Big Caslon and Garamond are unresolvable on a phone.
+            ForEach(ReaderFont.offered, id: \.self) { font in
                 Toggle(
                     isOn: Binding(get: { font == readerFont }, set: { _ in choose(font) })
                 ) {
@@ -278,8 +471,7 @@ struct ContentView: View {
         // `Menu` ignores `.buttonStyle(.borderless)`, hence `.menuStyle`; and
         // `.fixedSize()` stops a borderless-button menu claiming more width than its
         // label needs.
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .borderlessMenu()
         .fixedSize()
         .help("The face the play is set in")
         .accessibilityLabel("Reader typeface")
@@ -294,6 +486,10 @@ struct ContentView: View {
     /// No `keyboardShortcut`: the app has no menu bar of its own, and a shortcut on an
     /// item inside a borderless-button `Menu` is not reliably registered.
     /// `--diagnostics` covers launching noisy.
+    ///
+    /// macOS only. On a phone this toggle is one row of `overflowMenu`, which also
+    /// carries the three commands that were keyboard shortcuts here.
+    #if os(macOS)
     @ViewBuilder
     private var diagnosticsMenu: some View {
         Menu {
@@ -301,12 +497,12 @@ struct ContentView: View {
         } label: {
             Image(systemName: "ellipsis.circle")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .borderlessMenu()
         .fixedSize()
         .help("Show the model, the load check and the latency numbers")
         .accessibilityLabel("Diagnostics")
     }
+    #endif
 
     /// `nil` for a family that is installed and idle, which is the ordinary case and
     /// wants no glyph at all.

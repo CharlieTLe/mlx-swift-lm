@@ -51,6 +51,19 @@ struct Corpus: Sendable {
 }
 
 enum CorpusLoader {
+    /// Where `Plays/` is.
+    ///
+    /// `Bundle.module` is synthesized for a SwiftPM target and simply does not exist
+    /// in the iOS app target, which compiles these same sources directly. Xcode
+    /// defines `SWIFT_PACKAGE` only for package targets, so it is the flag that tells
+    /// the two builds apart. In the app the directory is a folder reference copied to
+    /// the `.app` root, so `Bundle.main` finds it the same way.
+    #if SWIFT_PACKAGE
+    private static let resources = Bundle.module
+    #else
+    private static let resources = Bundle.main
+    #endif
+
     enum Failure: LocalizedError {
         case resourcesMissing
         case noPlays(URL)
@@ -63,11 +76,14 @@ enum CorpusLoader {
                 // `.bundle` directory beside the binary, so this fires whenever
                 // the executable has been moved out on its own — which is the one
                 // way an installed copy can be broken, hence both audiences here.
+                // The iOS app has a fourth: `Plays/` missing from the `.app` means
+                // the folder reference dropped out of Copy Bundle Resources.
                 "Could not find the Plays resource directory. "
                     + "ShakespeareReader_ShakespeareReader.bundle must sit beside the "
                     + "executable. Run `brew reinstall shakespeare-reader` if this was "
                     + "installed with Homebrew, or `swift run -c release ShakespeareReader` "
-                    + "from a source checkout."
+                    + "from a source checkout. In the iOS app, check that Plays is still "
+                    + "a folder reference in Copy Bundle Resources."
             case .noPlays(let url):
                 "No play JSON found in \(url.path). From a source checkout, generate it "
                     + "with `python3 tools/build_corpus.py --all --out "
@@ -84,7 +100,7 @@ enum CorpusLoader {
     /// instead of `.process`: adding a play is dropping a file in, with no build
     /// file to edit.
     static func load() throws -> Corpus {
-        guard let directory = Bundle.module.url(forResource: "Plays", withExtension: nil)
+        guard let directory = resources.url(forResource: "Plays", withExtension: nil)
         else {
             throw Failure.resourcesMissing
         }

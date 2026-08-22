@@ -185,24 +185,88 @@ final class AnnotationService {
     /// pass churns far larger activations — `MuseGlimmerDemo` needed 2 GB for the
     /// 30B VLM. Deciding after the load, from resident size, means `--model` picks
     /// the right pool without a table of model sizes to keep current.
+    ///
+    /// The 48 GB ceiling is a Mac number and stays on the Mac. On iOS the ceiling is
+    /// applied unconditionally instead, and low: 6 GB is well over the 4B model's
+    /// ~3 GB peak but under what iOS will hand a single app even with the
+    /// increased-memory-limit entitlement, so MLX applies backpressure, waiting for
+    /// buffers to free rather than allocating, instead of the app being jetsam-killed
+    /// with no error to report. The `isLarge` branch cannot fire on a phone at 4B, so
+    /// this is not a second guess at the same question.
     private static func tuneMemory() {
         let resident = Memory.snapshot().activeMemory
         let isLarge = resident > 8 * 1024 * 1024 * 1024
         Memory.cacheLimit = isLarge ? 2 * 1024 * 1024 * 1024 : 256 * 1024 * 1024
+        #if os(macOS)
         if isLarge {
             Memory.memoryLimit = 48 * 1024 * 1024 * 1024
         }
+        #else
+        Memory.memoryLimit = 6 * 1024 * 1024 * 1024
+        #endif
     }
+
+    /// Where the weights come from.
+    ///
+    /// macOS takes the default, which resolves to `~/.cache/huggingface/hub` and is
+    /// shared with every other MLX tool and with Python's `huggingface_hub`.
+    ///
+    /// iOS may not. `swift-huggingface`'s location provider picks
+    /// `Library/Caches/huggingface/hub` for a sandboxed app, and iOS reclaims `Caches`
+    /// under disk pressure whenever it likes, which for a 2.2 GB snapshot means a
+    /// silent full re-download on some later launch, with the reader watching a
+    /// progress bar they already sat through once. `Application Support` is not
+    /// purgeable, and it is already where `AnnotationCache` writes.
+    private static var downloader: any Downloader {
+        #if os(macOS)
+        #hubDownloader()
+        #else
+        #hubDownloader(HubClient(cache: HubCache(cacheDirectory: hubCacheDirectory())))
+        #endif
+    }
+
+    #if !os(macOS)
+    /// `Application Support/huggingface/hub`, a sibling of the annotation cache's
+    /// own `ShakespeareReader` directory rather than a child of it, so the layout
+    /// under `huggingface/` stays the Python-compatible one `HubCache` documents.
+    ///
+    /// Excluded from backup: these are bytes Hugging Face will hand back on
+    /// demand, and 2.2 GB of them has no business in anyone's iCloud backup or in
+    /// the restore time of their next phone.
+    private static func hubCacheDirectory() -> URL {
+        var root = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("huggingface", isDirectory: true)
+        let hub = root.appendingPathComponent("hub", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: hub, withIntermediateDirectories: true)
+
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? root.setResourceValues(values)
+        return hub
+    }
+    #endif
 
     func load() async {
         if case .ready = loadState { return }
         if case .loading = loadState { return }
 
+        // Before the first `Memory` touch below, which is what would abort the process
+        // on a Simulator rather than fail. See `hasMLXDevice`.
+        guard hasMLXDevice else {
+            loadState = .failed(
+                "The iOS Simulator has no Metal device for MLX, so nothing can be "
+                    + "annotated here. The reader, the corpus and the layout all work; "
+                    + "run on a device to generate.")
+            return
+        }
+
         Memory.cacheLimit = 256 * 1024 * 1024
         loadState = .loading(nil)
         do {
             let container = try await loadModelContainer(
-                from: #hubDownloader(),
+                from: Self.downloader,
                 using: #huggingFaceTokenizerLoader(),
                 configuration: Self.configuration(for: modelID)
             ) { progress in
@@ -437,7 +501,8 @@ final class AnnotationService {
     ) async throws -> [String] {
         current.session.generateParameters = budgeted(presets.followUp)
 
-        var raw = try await collect(current.session.streamDetails(to: Prompts.followUpRequest), stats: report)
+        var raw = try await collect(
+            current.session.streamDetails(to: Prompts.followUpRequest), stats: report)
         var parsed = Prompts.FollowUps.parse(raw, asked: current.asked)
 
         // Fewer than two survivors gets one retry, then the row is hidden — one
@@ -667,8 +732,9 @@ final class AnnotationService {
             ["role": "system", "content": instructions],
             ["role": "user", "content": user],
         ]
-        return (try? tokenizer.applyChatTemplate(
-            messages: messages, tools: nil, additionalContext: nonThinking))?.count ?? 0
+        return
+            (try? tokenizer.applyChatTemplate(
+                messages: messages, tools: nil, additionalContext: nonThinking))?.count ?? 0
     }
 
     private static func stats(_ info: GenerateCompletionInfo) -> GenerationStats {

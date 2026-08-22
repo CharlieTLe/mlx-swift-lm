@@ -173,4 +173,27 @@ enum Citation {
         let lines = first == last ? "\(first)" : "\(first)-\(last)"
         return "\(title) · \(location).\(lines) (this edition)"
     }
+
+    /// The selected lines with the citation appended, which is what makes a quote
+    /// pasted into notes traceable.
+    ///
+    /// Here rather than in `SceneReaderView` because the two platforms copy through
+    /// different mechanisms from different views: macOS hands an `NSItemProvider` to
+    /// the responder chain from the reader pane, iOS writes `UIPasteboard` from the
+    /// reader toolbar. The *text* is the same either way.
+    static func quotation(
+        play: Play, key: SceneKey, scene: Scene, range: ClosedRange<Int>
+    ) -> String {
+        let quoted = scene.lines[range]
+            .map { line -> String in
+                if line.isDirection {
+                    return "[\(line.plainText)]"
+                }
+                return line.startsSpeech && line.speaker != nil
+                    ? "\(line.speaker!). \(line.text)" : line.text
+            }
+            .joined(separator: "\n")
+        return quoted + "\n\n"
+            + string(play: play, key: key, scene: scene, range: range)
+    }
 }

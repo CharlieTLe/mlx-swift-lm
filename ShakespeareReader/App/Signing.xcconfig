@@ -1,0 +1,13 @@
+// Signing settings for the iOS app, kept out of `project.pbxproj` so a clone does not
+// arrive carrying someone else's Apple Developer team.
+//
+// `#include?` is the optional form: with no `Local.xcconfig` present this file is empty
+// and `DEVELOPMENT_TEAM` stays unset, which is what a fresh clone wants — pick a team in
+// Xcode's Signing & Capabilities tab, or write it here.
+//
+// To keep your own team out of `git status`, create `App/Local.xcconfig`, which is
+// ignored:
+//
+//     DEVELOPMENT_TEAM = ABCDE12345
+//
+#include? "Local.xcconfig"

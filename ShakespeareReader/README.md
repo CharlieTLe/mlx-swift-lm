@@ -66,6 +66,94 @@ swift run -c release ShakespeareReader
 
 Use `-c release`; a debug 4B forward pass is not worth watching.
 
+### On iPhone
+
+```bash
+open ShakespeareReader/App/ShakespeareReader.xcodeproj
+```
+
+Pick your team under **Signing & Capabilities**, change the bundle id
+(`com.charliele.ShakespeareReader`) to one your team owns, and Run. iPhone only, iOS 18.0
+and up; there is no iPad or visionOS layout.
+
+The checked-in project sets **no** `DEVELOPMENT_TEAM`, so nobody inherits anyone else's.
+`App/Signing.xcconfig` is the base configuration for both build configurations and does
+nothing but optionally include `App/Local.xcconfig`, which is gitignored. Put your team
+there to keep it out of `git status` entirely, and to build from the command line:
+
+```
+DEVELOPMENT_TEAM = ABCDE12345
+```
+
+The entitlements file asks for one thing, `com.apple.developer.kernel.increased-memory-limit`,
+which raises the jetsam ceiling a 4B model needs and which a free personal team can grant.
+It does *not* ask for `extended-virtual-addressing`: personal teams cannot sign that one at
+all, and it only buys an address space past roughly 4 GB, where the measured peak working
+set here is 3.31 GB. Note that a personal team's profile expires in about seven days, after
+which the app stops launching until you rebuild it.
+
+Same code, same corpus, same model. First launch downloads the same 2.2 GB of
+`mlx-community/Qwen3-4B-4bit`, and the header's percentage is the only thing to watch
+until it lands.
+
+The phone layout is the desktop one folded up: the scene list and the reader are the two
+columns of a `NavigationSplitView`, which an iPhone always renders collapsed, so the
+navigator is a push and the system back button is ⌘1. The commentary is an `.inspector`,
+which at this size class presents as a **sheet**, pinned to `.medium` so the verse stays
+on screen above the gloss, which is the part of the three-pane layout worth keeping, and
+draggable to `.large` to read a long one. Selection is by touch: tap a line, double-tap
+for the whole speech, and **press and hold, then drag** to sweep a passage. That last one
+is not a flourish. A touch pan *is* a `DragGesture`, so the bare per-row drag the Mac uses
+would win the vertical gesture against the enclosing `ScrollView` and the scene would not
+scroll at all. On a phone the sweep is therefore not a SwiftUI gesture: it is a
+`UILongPressGestureRecognizer` on the scroll view itself, in `SweepRecognizer`, which
+recognizes only after the finger holds still and keeps reporting its location afterwards.
+No composition of SwiftUI gestures does both jobs — every shape of `DragGesture` on the
+rows stopped the scene scrolling, including behind `LongPressGesture.sequenced(before:)`
+and including with `.simultaneousGesture`, and masking the drag off with
+`including: .none` until a long press armed it restored scrolling but never started a
+sweep, because a gesture that was masked when the finger landed is not handed the touch
+already in flight. Only hardware and a Simulator *click-drag* show this: a trackpad scroll
+on the Simulator is a wheel event and never contends for the touch, which is why this
+survived a Simulator pass. ⌘R, ⌘C and Esc become Regenerate, Copy passage and
+Clear selection in the reader's `⋯` menu. There is no ⌘2 and no commentary toggle: the
+sheet rises when a passage is selected and is gone when it is swiped away, so there is no
+"is the pane showing" preference for a phone to keep.
+
+Three divergences worth knowing about before they look like bugs:
+
+- **`FoundationModelsIntegration` is on.** The Xcode project model has no way to express
+  `traits: []`, so unlike the SwiftPM build described under Notes below, this one
+  compiles `MLXFoundationModels`. The app never calls into it and the whole target is
+  behind `@available(iOS 27.0, *)` plus `#if canImport(FoundationModels)`, so the cost is
+  build time, not behaviour.
+- **The typefaces are not the same three.** Of Caslon, Baskerville and Garamond, iOS
+  ships only Baskerville: there is no iOS Big Caslon, and Garamond is not in an iOS
+  downloadable font catalog. The menu offers Baskerville, Hoefler Text and Palatino
+  instead, both replacements taken from the runtime's `System/Library/Fonts/AppFonts`,
+  which is the set actually exposed to apps. Iowan Old Style was the obvious third choice
+  and is **not** in it: iOS ships the file, `CTFontManagerCopyAvailableFontFamilyNames`
+  does not return it, and the row rendered in SF while offering a download that does not
+  exist. The cases are not renamed per platform, so a `readerFont` of `caslon` synced from
+  a Mac falls back to the system face rather than silently substituting a face it is not.
+- **The reader pane is not focusable on iOS.** `.focusable()` exists there only to receive
+  the three responder-chain commands macOS uses, and asking for focus without them made
+  the reader first responder with no input view, which raised the software keyboard over
+  the bottom third of the play every time a navigation-bar menu opened.
+
+On the **Simulator** everything except the model works: all 35 plays load from the bundled
+`Plays/`, the navigator pushes, tap and double-tap and press-and-hold-then-drag all select,
+scrolling still works — but scroll it by *click-dragging*, not with the trackpad, since a
+trackpad scroll there is a wheel event and proves nothing about a touch pan, as the gesture
+note above records — the typeface menu changes the verse, and Dynamic Type at the largest
+accessibility size scales the custom faces once rather than twice. The header shows a red
+**Load failed** instead of a model, and that is deliberate: MLX has no Metal device on the
+Simulator, and finding that out is not a recoverable error. The first touch of any
+`MLX.Memory` knob constructs `mlx::core::metal::Device`, which `abort()`s from C++ where no
+Swift `catch` can reach it. Unguarded the app dies on launch, taking the whole UI with it, so
+`AnnotationService.load()` asks `hasMLXDevice` first and refuses with a message. Annotating
+needs a device.
+
 ## Latency
 
 Measured on an M4 Max with `mlx-community/Qwen3-4B-4bit`, over the thirteen sample
@@ -434,6 +522,19 @@ prints the replacement.
   checkout. It sets `traits: []` on that dependency, which turns off the default
   `FoundationModelsIntegration` trait: the app never touches Apple's FoundationModels
   adapter, and `MLXHuggingFace` pulls that target in only when the trait is on.
+- **The iOS app target compiles the same sources directly**, from
+  `App/ShakespeareReader.xcodeproj`; `Package.swift` is untouched and the local package is
+  not in the iOS build graph. `Annotation/`, `Corpus/`, `Reader/` and `Platform/` are
+  file-system-synchronized groups, so adding a file to any of them needs no project edit.
+  The four top-level `.swift` files are listed individually, though, so a *new* top-level
+  file or a new subdirectory does need one. That split is deliberate. A single synchronized group over
+  `Sources/ShakespeareReader` also swallows `Resources/Plays`, and Xcode has no way to
+  exclude a plain directory from one: `membershipExceptions` works for a bundle like
+  `Documentation.docc` but recurses into an ordinary folder, so every play was copied
+  **twice**: once flattened into the `.app` root by the synchronized group, and once as
+  the `Plays/` folder reference `CorpusLoader` needs. Keeping the corpus out of the
+  synchronized tree is what preserves "adding a play is dropping a file in", which is the
+  ethos that matters most here.
 - **`Bundle.module` in an executable target** resolves to a `.bundle` beside the
   binary in `.build/release/`. That is correct under `swift run`; a binary copied out
   on its own leaves its corpus behind, and `CorpusLoader` reports that rather than

@@ -1,8 +1,14 @@
-import AppKit
+import Combine
 import Dispatch
 import Foundation
 import MLX
 import SwiftUI
+
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// Command-line options.
 ///
@@ -91,6 +97,13 @@ enum EntryPoint {
     static func main() {
         let options = AppOptions.parse(Array(CommandLine.arguments.dropFirst()))
 
+        // The headless flags are terminal work and macOS-only. `dispatchMain()` and
+        // `exit()` have no place in an iOS app, where an app that exits itself on
+        // launch reads to the system as a crash, and there is no terminal to print a
+        // prompt dump or a benchmark table to. iOS parses the arguments and ignores them,
+        // which leaves `--diagnostics` and `--model` working under
+        // `xcrun simctl launch`.
+        #if os(macOS)
         if options.runSelfTest {
             // Entirely synchronous and off the main actor, so it can run right here.
             exit(SelfTest.run() ? 0 : 1)
@@ -115,6 +128,7 @@ enum EntryPoint {
             }
             dispatchMain()
         }
+        #endif
 
         ShakespeareReaderApp.options = options
         ShakespeareReaderApp.main()
@@ -129,8 +143,13 @@ struct ShakespeareReaderApp: App {
     init() {
         // An unbundled SwiftPM executable launches as an accessory process, which
         // gets no focused window and no menu bar. Promote it to a regular app.
+        //
+        // Nothing to do in the iOS app: it is a real bundle, launched by the system
+        // as a foreground application, so there is no accessory state to escape.
+        #if os(macOS)
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        #endif
     }
 
     // `SwiftUI.Scene` in full: this app's corpus has its own `Scene` type, and an
@@ -142,7 +161,26 @@ struct ShakespeareReaderApp: App {
                 // the floor has to clear that or the reader gets pushed under its own
                 // minimum. AppKit clamps an autosaved frame up to a raised minimum on the
                 // next launch, so a window left narrower than this widens once and holds.
-                .frame(minWidth: 1080, minHeight: 640)
+                //
+                // macOS only: on a phone this would force the content wider than the
+                // screen.
+                #if os(macOS)
+            .frame(minWidth: 1080, minHeight: 640)
+                #else
+            // The 4B model's working set is a large fraction of what iOS will
+            // let one app hold, and MLX's buffer-reuse pool is the part of it
+            // that is safe to give back: the weights are still needed, cached
+            // scratch buffers are not. Dropping them on a warning is what makes
+            // the difference between the system reclaiming memory and jetsam
+            // killing the app mid-annotation.
+            .onReceive(
+                NotificationCenter.default.publisher(
+                    for: UIApplication.didReceiveMemoryWarningNotification)
+            ) { _ in
+                guard hasMLXDevice else { return }
+                Memory.clearCache()
+            }
+                #endif
         }
     }
 }
