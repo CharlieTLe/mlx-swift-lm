@@ -98,7 +98,8 @@ until it lands.
 
 The phone layout is the desktop one folded up: the scene list and the reader are the two
 columns of a `NavigationSplitView`, which an iPhone always renders collapsed, so the
-navigator is a push and the system back button is ⌘1. The commentary is an `.inspector`,
+navigator is a push and the system back button is ⌘1. The find field sits at the top of
+that `Plays` column, the same one the Mac has. The commentary is an `.inspector`,
 which at this size class presents as a **sheet**, pinned to `.medium` so the verse stays
 on screen above the gloss, which is the part of the three-pane layout worth keeping, and
 draggable to `.large` to read a long one. Selection is by touch: tap a line, double-tap
@@ -233,7 +234,12 @@ A cache hit costs **1 ms** and no model work at all.
 - **One scene at a time.** This bounds rows to under 1,000 (Love's Labour's Lost V.ii
   is the worst case at 967, then The Winter's Tale IV.iv at 894), makes every selection
   intrinsically scene-scoped, and keeps the cache key trivial. The rows are in a
-  `LazyVStack`, so only the visible ones are built. The navigator is how you move.
+  `LazyVStack`, so only the visible ones are built. The navigator is how you move, and
+  it is an **accordion**: 35 play rows, one play open at a time, and inside it the act
+  you are reading, so the scene you are on is always the one on screen. ⌘F focuses the
+  find field at the top of the pane, which filters by play title (`macb`, `henry iv`,
+  `loves labours`) or by scene setting (`churchyard` finds the grave-diggers); Esc
+  clears it, and clicking a line is what hands the keyboard back to the play.
 - **Scene summaries** are generated in the background when a scene opens, in their
   own throwaway session. A selection cancels the prewarm rather than queueing behind
   it, and proceeds without a summary — the summary never blocks an annotation.
@@ -249,11 +255,12 @@ A cache hit costs **1 ms** and no model work at all.
   Two things show regardless, because hiding them makes a working app look broken: the
   first-launch download progress, and failures.
 - **Your place is remembered between launches**: the scene you were reading comes back
-  with the passage you had selected still highlighted and scrolled into view, along with
-  the acts you had collapsed in the navigator and whichever panes you had hidden. A
-  restored passage is not annotated on its own: click it or press ⌘R for that. A corpus
-  rebuilt under a stored position keeps the scene and drops the highlight rather than
-  putting it over different lines.
+  with the passage you had selected still highlighted and scrolled into view, and
+  whichever panes you had hidden. The navigator comes back open at the play and act
+  being read, scrolled to that scene, which it works out from the position rather than
+  storing. A restored passage is not annotated on its own: click it or press ⌘R for
+  that. A corpus rebuilt under a stored position keeps the scene and drops the
+  highlight rather than putting it over different lines.
 
 All 35 plays are in the reader; the model has clearly read the famous ones before,
 which is worth remembering when judging output. `--model mlx-community/Qwen3-8B-4bit`

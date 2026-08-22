@@ -22,9 +22,10 @@ struct ContentView: View {
     @AppStorage("showsNavigator") private var showsNavigator = true
     @AppStorage("showsCommentary") private var showsCommentary = true
 
-    /// Lives here, not in `NavigatorView`, so collapsed acts survive hiding the pane.
-    /// Seeded from the last session in `init(options:)`.
-    @State private var collapsedActs: Set<String> = []
+    /// What the navigator has open. Lives here, not in `NavigatorView`, so it survives
+    /// hiding the pane. Not persisted and not seeded: it follows the reading position,
+    /// so the restored `sceneKey` implies it at launch.
+    @State private var outline = NavigatorOutline()
 
     /// The face the *play text* is set in; everything else stays on the system face.
     ///
@@ -60,7 +61,6 @@ struct ContentView: View {
             initialValue: AnnotationService(
                 modelID: options.modelID ?? LLMRegistry.qwen3_4b_4bit.name,
                 greedy: options.greedy))
-        _collapsedActs = State(initialValue: ProgressStore.collapsedActs())
     }
 
     var body: some View {
@@ -80,11 +80,16 @@ struct ContentView: View {
             // through `SceneReaderView`'s `$selection` binding and never calls it. No
             // debounce: CFPreferences coalesces writes, so a held arrow key is not a
             // per-keypress disk hit.
-            .onChange(of: sceneKey) { recordProgress() }
-            .onChange(of: selection) { recordProgress() }
-            .onChange(of: collapsedActs) {
-                ProgressStore.save(collapsedActs: collapsedActs)
+            //
+            // The navigator follows from here for the same reason, and this is also
+            // what seeds it: `loadCorpus()` writes the restored key into a `sceneKey`
+            // that started `nil`, so a launch opens the outline at the scene coming
+            // back.
+            .onChange(of: sceneKey) {
+                recordProgress()
+                if let sceneKey { outline = .following(sceneKey) }
             }
+            .onChange(of: selection) { recordProgress() }
     }
 
     // MARK: - Layout
@@ -230,7 +235,7 @@ struct ContentView: View {
         NavigatorView(
             corpus: corpus,
             key: Binding(get: { key }, set: { openScene($0, in: corpus) }),
-            collapsed: $collapsedActs)
+            outline: $outline)
     }
 
     @ViewBuilder

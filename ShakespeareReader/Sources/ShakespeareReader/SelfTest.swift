@@ -40,6 +40,7 @@ enum SelfTest {
         goldenPromptRender(log)
         readerFonts(log)
         readingProgress(log)
+        navigator(log)
 
         if log.failures.isEmpty {
             print("selftest: all checks passed")
@@ -234,9 +235,11 @@ enum SelfTest {
             return
         }
         let speech = scene.lines.filter { $0.kind == .speech }
-        guard let start = speech.firstIndex(where: {
-            $0.text.hasPrefix("To be, or not to be")
-        }) else {
+        guard
+            let start = speech.firstIndex(where: {
+                $0.text.hasPrefix("To be, or not to be")
+            })
+        else {
             log.fail("'To be, or not to be' not found in Hamlet III.i")
             return
         }
@@ -386,49 +389,49 @@ enum SelfTest {
         let scene = Scene(number: 1, setting: "Nowhere.", lines: lines)
 
         // Range normalizes regardless of drag direction.
-        log.equal(LineSelection(anchor: 4, head: 1).range, 1...4, "a backwards range")
-        log.equal(LineSelection(anchor: 1, head: 4).range, 1...4, "a forwards range")
+        log.equal(LineSelection(anchor: 4, head: 1).range, 1 ... 4, "a backwards range")
+        log.equal(LineSelection(anchor: 1, head: 4).range, 1 ... 4, "a forwards range")
         log.equal(LineSelection(at: 2).count, 1, "a single-line selection")
 
         // Shift-click backwards through the anchor keeps the anchor.
         var backwards = LineSelection(at: 4)
         backwards.extend(to: 1)
         log.equal(backwards.anchor, 4, "the anchor after extending backwards")
-        log.equal(backwards.range, 1...4, "the range after extending backwards")
+        log.equal(backwards.range, 1 ... 4, "the range after extending backwards")
 
         // Drag reversal: past the anchor and back again.
         var reversed = LineSelection(at: 2)
         reversed.extend(to: 5)
         reversed.extend(to: 1)
-        log.equal(reversed.range, 1...2, "the range after a drag reverses")
+        log.equal(reversed.range, 1 ... 2, "the range after a drag reverses")
 
         // Double-click takes the whole speech, across the interleaved direction.
         log.equal(
-            LineSelection.speech(at: 2, in: scene).range, 1...4,
+            LineSelection.speech(at: 2, in: scene).range, 1 ... 4,
             "a double-clicked speech spanning a direction")
         log.equal(
-            LineSelection.speech(at: 3, in: scene).range, 1...4,
+            LineSelection.speech(at: 3, in: scene).range, 1 ... 4,
             "a double-click on a direction inside a speech")
         // A direction between two different speakers stands alone.
         log.equal(
-            LineSelection.speech(at: 6, in: scene).range, 6...6,
+            LineSelection.speech(at: 6, in: scene).range, 6 ... 6,
             "a double-clicked trailing direction")
         log.equal(
-            LineSelection.speech(at: 0, in: scene).range, 0...0,
+            LineSelection.speech(at: 0, in: scene).range, 0 ... 0,
             "a double-clicked opening direction")
         log.equal(
-            LineSelection.speech(at: 5, in: scene).range, 5...5,
+            LineSelection.speech(at: 5, in: scene).range, 5 ... 5,
             "a double-clicked one-line speech")
 
         // Clamping at the scene edges.
         log.equal(
-            LineSelection(anchor: -4, head: 99).clamped(to: lines)?.range, 0...6,
+            LineSelection(anchor: -4, head: 99).clamped(to: lines)?.range, 0 ... 6,
             "clamping past both edges")
         log.check(
             LineSelection(at: 0).clamped(to: [])?.range == nil,
             "clamping into an empty scene should yield nil")
         log.equal(
-            LineSelection.speech(at: 42, in: scene).range, 42...42,
+            LineSelection.speech(at: 42, in: scene).range, 42 ... 42,
             "a double-click on an out-of-range index")
 
         // Arrow moves. Nothing selected *lands* rather than steps, whichever way it was
@@ -916,6 +919,127 @@ enum SelfTest {
             corpus.opening(from: past).selection,
             LineSelection(at: scene.lines.count - 1),
             "a selection past the end of the scene")
+    }
+
+    // MARK: - Navigator
+
+    /// The accordion and the find field, which are pure functions of a `SceneKey` and
+    /// of the corpus respectively — which is the whole reason they are not written
+    /// inside `NavigatorView`. This is the first coverage the navigator has had.
+    private static func navigator(_ log: Log) {
+        guard let corpus = try? CorpusLoader.load() else {
+            log.fail("could not load the corpus for the navigator checks")
+            return
+        }
+
+        // MARK: The outline
+
+        // What a launch gets: the restored position, and nothing else open.
+        let outline = NavigatorOutline.following(
+            SceneKey(playID: "macbeth", act: 2, scene: 1))
+        log.check(outline.isOpen(play: "macbeth"), "the read play should be open")
+        log.check(
+            outline.isOpen(act: 2, in: "macbeth"), "the read act should be open")
+        log.check(!outline.isOpen(play: "hamlet"), "another play should be shut")
+        log.check(
+            !outline.isOpen(act: 1, in: "macbeth"),
+            "another act of the open play should be shut")
+        // The invariant: an open act belongs to the open play.
+        log.check(
+            !outline.isOpen(act: 2, in: "hamlet"),
+            "the open act number should not read as open in another play")
+
+        // Tapping the open play closes it, and takes its act with it.
+        var closed = outline
+        closed.toggle(play: "macbeth")
+        log.check(!closed.isOpen(play: "macbeth"), "the tapped-open play should close")
+        log.check(
+            !closed.isOpen(act: 2, in: "macbeth"),
+            "closing a play should drop its open act")
+
+        // Tapping another play moves the accordion, with that play's acts shut: five
+        // act rows to choose between, not 28 scene rows.
+        var moved = outline
+        moved.toggle(play: "hamlet")
+        log.check(moved.isOpen(play: "hamlet"), "the tapped play should open")
+        log.check(!moved.isOpen(play: "macbeth"), "the play left behind should close")
+        log.check(
+            !moved.isOpen(act: 1, in: "hamlet"),
+            "a newly opened play should start with its acts shut")
+
+        // An act in another play opens both.
+        var reached = outline
+        reached.toggle(act: 3, in: "hamlet")
+        log.check(reached.isOpen(play: "hamlet"), "an act should open its play with it")
+        log.check(reached.isOpen(act: 3, in: "hamlet"), "the tapped act should open")
+        log.check(!reached.isOpen(play: "macbeth"), "the play left behind should close")
+
+        // Tapping the open act closes it and leaves the play open.
+        reached.toggle(act: 3, in: "hamlet")
+        log.check(!reached.isOpen(act: 3, in: "hamlet"), "the tapped-open act should close")
+        log.check(
+            reached.isOpen(play: "hamlet"), "closing an act should leave its play open")
+
+        // MARK: The find field
+
+        /// The play ids a query lists, in corpus order.
+        func ids(_ query: String) -> [String] {
+            NavigatorSearch.matches(in: corpus, query: query).map(\.play.id)
+        }
+
+        // No query is the whole corpus, whole: the outline alone decides what shows.
+        let all = NavigatorSearch.matches(in: corpus, query: "  ")
+        log.equal(all.count, 35, "the number of plays with no query")
+        for match in all {
+            log.check(
+                match.matchedTitle, "\(match.play.id) should match by title with no query")
+            log.equal(match.acts.count, 5, "\(match.play.id) acts with no query")
+            log.equal(
+                match.acts.map(\.scenes.count), match.play.acts.map(\.scenes.count),
+                "\(match.play.id) scene counts with no query")
+        }
+
+        // A title match: the play alone, whole, with its acts left for the reader.
+        log.equal(ids("macb"), ["macbeth"], "the plays matching \"macb\"")
+        log.check(
+            NavigatorSearch.matches(in: corpus, query: "macb").first?.matchedTitle == true,
+            "\"macb\" should match Macbeth by title")
+        // Folding: mixed-case titles, and the apostrophe the reader will not type.
+        log.equal(ids("henry iv"), ["henry-iv-part-1", "henry-iv-part-2"], "\"henry iv\"")
+        log.equal(ids("loves labours"), ["loves-labours-lost"], "\"loves labours\"")
+        log.equal(ids("midsummer"), ["midsummer-nights-dream"], "\"midsummer\"")
+
+        // A setting match: only the acts that hold hits, carrying only those scenes.
+        let churchyard = NavigatorSearch.matches(in: corpus, query: "CHURCHYARD")
+        log.equal(
+            churchyard.map(\.play.id), ["hamlet", "romeo-and-juliet"],
+            "the plays matching \"churchyard\"")
+        for match in churchyard {
+            log.check(
+                !match.matchedTitle,
+                "\(match.play.id) matched a setting, not a title")
+            for actMatch in match.acts {
+                log.check(
+                    !actMatch.scenes.isEmpty,
+                    "\(match.play.id) act \(actMatch.act.number) came back with no scenes")
+                log.check(
+                    actMatch.scenes.allSatisfy {
+                        $0.setting.lowercased().contains("churchyard")
+                    },
+                    "\(match.play.id) act \(actMatch.act.number) carried a scene that "
+                        + "does not match")
+            }
+        }
+        // The grave-diggers, which is the passage this is for: Hamlet, Act V, Scene I.
+        log.equal(
+            churchyard.first?.acts.map(\.act.number), [5],
+            "the acts of Hamlet matching \"churchyard\"")
+        log.equal(
+            churchyard.first?.acts.first?.scenes.map(\.number), [1],
+            "the scenes of Hamlet V matching \"churchyard\"")
+
+        // Nothing at all, which the view renders as its placeholder.
+        log.equal(ids("zzz"), [], "the plays matching \"zzz\"")
     }
 }
 

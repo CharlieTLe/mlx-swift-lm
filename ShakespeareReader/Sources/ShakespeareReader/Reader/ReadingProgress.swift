@@ -17,7 +17,7 @@ struct ReadingProgress: Codable, Sendable, Equatable {
     var corpusStamp: String
 }
 
-/// `ReadingProgress` and the navigator's collapsed acts, in `UserDefaults`.
+/// `ReadingProgress`, in `UserDefaults`.
 ///
 /// `UserDefaults` rather than JSON beside the annotation cache: the record is one
 /// small value, and it belongs with the window frame and `readerFont` rather than
@@ -35,7 +35,6 @@ enum ProgressStore {
     static let schemaVersion = 1
 
     private static let progressKey = "readingProgress"
-    private static let collapsedActsKey = "collapsedActs"
 
     // MARK: - Position
 
@@ -53,17 +52,5 @@ enum ProgressStore {
     static func save(_ record: ReadingProgress) {
         guard let data = try? JSONEncoder().encode(record) else { return }
         UserDefaults.standard.set(data, forKey: progressKey)
-    }
-
-    // MARK: - Collapsed acts
-
-    /// A plist-native string array rather than more JSON, since that is what the set
-    /// already is. Stored sorted so the plist does not churn on every write.
-    static func collapsedActs() -> Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: collapsedActsKey) ?? [])
-    }
-
-    static func save(collapsedActs: Set<String>) {
-        UserDefaults.standard.set(collapsedActs.sorted(), forKey: collapsedActsKey)
     }
 }
