@@ -202,9 +202,13 @@ On the **Simulator** everything except the model works: all 35 plays load from t
 scrolling still works — but scroll it by *click-dragging*, not with the trackpad, since a
 trackpad scroll there is a wheel event and proves nothing about a touch pan, as the gesture
 note above records — the typeface menu changes the verse, and Dynamic Type at the largest
-accessibility size scales the custom faces once rather than twice. The header shows a red
-**Load failed** instead of a model, and that is deliberate: MLX has no Metal device on the
-Simulator, and finding that out is not a recoverable error. The first touch of any
+accessibility size scales the custom faces once rather than twice. It does the same for the
+compound case, largest accessibility size *and* the Largest size step, on the system face
+too — measured there, and the measurement is why the system face has its own sizing path:
+`Font.system(size:)` is fixed and ignores Dynamic Type entirely, so before that path
+existed, picking any size step froze the reader's Larger Text setting. The header shows a
+red **Load failed** instead of a model, and that is deliberate: MLX has no Metal device on
+the Simulator, and finding that out is not a recoverable error. The first touch of any
 `MLX.Memory` knob constructs `mlx::core::metal::Device`, which `abort()`s from C++ where no
 Swift `catch` can reach it. Unguarded the app dies on launch, taking the whole UI with it, so
 `AnnotationService.load()` asks `hasMLXDevice` first and refuses with a message. Annotating
@@ -298,12 +302,16 @@ A cache hit costs **1 ms** and no model work at all.
 - **Scene summaries** are generated in the background when a scene opens, in their
   own throwaway session. A selection cancels the prewarm rather than queueing behind
   it, and proceeds without a summary — the summary never blocks an annotation.
-- **Four typefaces for the play**: the system face, Caslon, Baskerville, Garamond,
-  picked from the `Aa` menu in the header and remembered between launches. It sets the
-  **play text only** — the navigator, the commentary, the header and the status strip
-  stay on the system face, and so does the line-number gutter: a serif family has no
-  monospaced digits, and the gutter is a fixed 30pt frame that depends on stable
-  digit advances to stay right-aligned.
+- **Four typefaces and five sizes for the play**: the system face, Caslon, Baskerville,
+  Garamond, and a Small / Default / Large / Larger / Largest ladder, both picked from the
+  same `Aa` menu in the header and both remembered between launches. Default reproduces
+  the shipped rendering exactly, by taking the same code path rather than an
+  arithmetically equivalent one. It sets the **play text only** — the navigator, the
+  commentary, the header and the status strip stay on the system face. So does the
+  line-number gutter, which is the one part that only half opts out: a serif family has
+  no monospaced digits so the *face* stays the system's, but the *size* follows the
+  reader's step, and the font and the frame width move together, because that width is a
+  budget for three digits' advances.
 - **Diagnostics are off by default.** The model capsule, the load check and the latency
   numbers under the commentary are for working on the app, not for reading a play; the
   header's `⋯` menu turns them on and the preference is remembered between launches.
@@ -531,7 +539,16 @@ line, the balcony direction sitting between verse lines 1 and 2, `THIRD WATCH` o
 its recovered inline heading); 11 follow-up parser cases; one **golden `PassageContext`
 render** compared against a checked-in string, which is what catches prompt drift; and
 the typeface picker's inputs, including the CoreText italic probe that decides whether
-a stage direction gets a real italic cut or a synthetic one. A deliberate prompt change
+a stage direction gets a real italic cut or a synthetic one; and the reader's size
+ladder — that every step round-trips through its stored raw value, that exactly one step
+is neutral and that its multiplier is exactly 1, that the multipliers rise along the
+declaration order the menu lists them in, that every role at Default returns the *same
+`Font` value* the app returned before there was a size setting — comparing rather than
+measuring, which is the one place the no-`Font` rule above is worth breaking — while a
+non-default step returns a different one, that the point measures Default derives come out
+byte-for-byte unchanged, and that two size steps or two Dynamic Type categories of the same
+face compare *unequal*, which is what makes the reader keep their place when the type
+resizes under them. A deliberate prompt change
 means regenerating that string alongside a `Prompts.version` bump — the self test
 prints the replacement.
 
@@ -591,6 +608,25 @@ prints the replacement.
   The picker is a `Menu` of `Toggle`s rather than `Button`s because an `NSMenuItem` has
   one image slot: a hand-drawn checkmark would displace the download or error glyph on
   the row the reader just picked, which is the one row whose state matters.
+- **The size ladder multiplies the system's point sizes**, and the awkward half is the
+  system face, not the serifs. `Font.body` is a *text style*, not a point size: there is no
+  arithmetic to do to it, so Default short-circuits to the bare style and only a
+  non-default step computes a number and hands it to `Font.system(size:)`. That costs two
+  things. The semibold in `.headline` is part of the style and not part of the size, so it
+  has to be restated by hand or the act heading loses its weight and reads as verse. And
+  `Font.system(size:)` turns out to be **fixed** — it does not follow Dynamic Type, which is
+  not documented anywhere and does not match `Font.custom(_:size:relativeTo:)`. Measured on
+  the Simulator: with the size step at Large the verse stayed 24pt tall from the `.large`
+  category all the way to AX5, while the Default reading grew from 22pt to 69pt. So the
+  system face is measured at the category actually in force rather than at `.large`, from a
+  `DynamicTypeSize` threaded onto the typeface, and the custom faces keep the `.large`
+  measurement because `relativeTo:` is what scales theirs and would otherwise scale it
+  twice. Measuring each style separately also keeps each one's own metric curve, so the
+  caption-derived speaker heading holds its proportion against the verse at accessibility
+  sizes. There is deliberately **no ⌘+ / ⌘−**: the app has no menu bar of its own, a
+  `keyboardShortcut` inside a borderless-button `Menu` is not reliably registered, and the
+  shape that does work — hidden zero-opacity buttons in the header — takes three of them
+  (⌘-, ⌘= and ⌘+) for the least frequently changed preference in the app.
 - **This is a sibling SwiftPM package** with a local path dependency on the enclosing
   checkout. It sets `traits: []` on that dependency, which turns off the default
   `FoundationModelsIntegration` trait: the app never touches Apple's FoundationModels

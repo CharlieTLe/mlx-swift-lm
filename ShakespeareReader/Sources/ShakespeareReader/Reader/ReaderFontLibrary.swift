@@ -16,8 +16,14 @@ final class ReaderFontLibrary {
     private(set) var downloading: Set<ReaderFont> = []
     private(set) var failed: [ReaderFont: String] = [:]
 
-    func typeface(for font: ReaderFont) -> ReaderTypeface {
-        ReaderTypeface(font, installed: installed)
+    /// `textSize` and `dynamicTypeSize` are threaded through rather than stored: neither
+    /// is a fact about which families are installed, which is all this object knows.
+    func typeface(
+        for font: ReaderFont, textSize: ReaderTextSize, dynamicTypeSize: DynamicTypeSize
+    ) -> ReaderTypeface {
+        ReaderTypeface(
+            font, textSize: textSize, dynamicTypeSize: dynamicTypeSize,
+            installed: installed)
     }
 
     func isAvailable(_ font: ReaderFont) -> Bool {

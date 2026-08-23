@@ -1,6 +1,7 @@
 import Foundation
 import MLXLLM
 import MLXLMCommon
+import SwiftUI
 
 /// Model-free assertions, run by `--selftest`. No download, no network, no GPU.
 ///
@@ -39,6 +40,7 @@ enum SelfTest {
         followUpParsing(log)
         goldenPromptRender(log)
         readerFonts(log)
+        readerTextSizes(log)
         readingProgress(log)
         navigator(log)
 
@@ -817,6 +819,154 @@ enum SelfTest {
                 installed.contains(family),
                 "\"\(family)\" is not among the installed font families, so "
                     + "ReaderFont.\(font) would silently render as the system face")
+        }
+    }
+
+    // MARK: - Reader text size
+
+    /// The same bound as `plausibleOpticalScales`, and for the same reason: named once
+    /// so the range and the failure message cannot drift apart. Wider, because this one
+    /// is a reader's preference rather than a correction, and still narrow enough that a
+    /// mistyped `15` cannot ship.
+    private static let plausibleTextSizeMultipliers: ClosedRange<CGFloat> = 0.7 ... 1.7
+
+    /// The size ladder's inputs, and the arithmetic `ReaderTypeface` does with them.
+    ///
+    /// Same philosophy as `readerFonts`: no `Font` is constructed, because a SwiftUI
+    /// `Font` cannot be measured. Everything asserted here is a number or a raw value.
+    /// `installed: []` also short-circuits `hasItalicFace`, so nothing here reaches
+    /// CoreText or the `@MainActor` `ReaderFontLibrary`.
+    private static func readerTextSizes(_ log: Log) {
+        /// The system face at a size step, which is every `ReaderTypeface` this section
+        /// needs. `installed: []` keeps it away from CoreText, and `.large` is the only
+        /// category macOS has.
+        func typeface(
+            _ size: ReaderTextSize, at category: DynamicTypeSize = .large
+        ) -> ReaderTypeface {
+            ReaderTypeface(
+                .system, textSize: size, dynamicTypeSize: category, installed: [])
+        }
+
+        for size in ReaderTextSize.allCases {
+            // The `@AppStorage("readerTextSize")` contract, exactly as `readerFonts`
+            // asserts it for the face: a raw value that stops round-tripping silently
+            // resets every reader to Default.
+            log.check(
+                ReaderTextSize(rawValue: size.rawValue) == size,
+                "ReaderTextSize.\(size) does not round-trip through its raw value")
+            log.check(
+                plausibleTextSizeMultipliers.contains(size.multiplier),
+                "ReaderTextSize.\(size) multiplier \(size.multiplier) is outside "
+                    + "\(plausibleTextSizeMultipliers), which is not a reading size")
+            // `isDefault` is what every role branches on to keep the shipped rendering
+            // byte-for-byte, so it has to mean "changes nothing" and not merely
+            // "is the case spelled default".
+            log.equal(
+                size.isDefault, size.multiplier == 1,
+                "ReaderTextSize.\(size).isDefault against a multiplier of exactly 1")
+        }
+
+        log.equal(ReaderTextSize.default.multiplier, 1, "the default multiplier")
+        log.equal(
+            ReaderTextSize.allCases.filter(\.isDefault).count, 1,
+            "the number of neutral size steps")
+        log.equal(
+            Set(ReaderTextSize.allCases.map(\.displayName)).count,
+            ReaderTextSize.allCases.count, "the number of distinct size display names")
+
+        // Declaration order is menu order, so the multipliers have to rise along it or
+        // the menu lists "Larger" above something larger still.
+        for (smaller, bigger) in zip(
+            ReaderTextSize.allCases, ReaderTextSize.allCases.dropFirst())
+        {
+            log.check(
+                smaller.multiplier < bigger.multiplier,
+                "ReaderTextSize.\(smaller) (\(smaller.multiplier)) does not sort below "
+                    + "\(bigger) (\(bigger.multiplier)) in `allCases` order")
+        }
+
+        // The byte-for-byte promise, in the units that can actually be read back off a
+        // `ReaderTypeface`. Every one of these is a multiplication by exactly 1.0.
+        let shipped = ReaderTypeface.system
+        log.equal(shipped.textSize, .default, "the shipped typeface's size step")
+        log.equal(shipped.speechGap, 6, "the shipped speech gap")
+        log.equal(shipped.directionIndent, 28, "the shipped stage-direction indent")
+        log.equal(shipped.gutterWidth, 30, "the shipped gutter width")
+        log.equal(shipped.actSceneTracking, 0, "the shipped act-heading tracking")
+        log.equal(shipped.speakerTracking, 0.6, "the shipped speaker tracking")
+
+        // The same promise for the fonts, and the one place in this file that does
+        // construct a `Font`. `readerFonts` above declines to, on the grounds that a
+        // SwiftUI `Font` cannot be *measured* — but it can be compared, and comparing is
+        // what is wanted here: these assert that Default returns the very same values
+        // the app returned before there was a size setting at all, rather than a
+        // computed `Font.system(size:)` that merely resolves to the same points. The two
+        // are not interchangeable, since only the text style follows Dynamic Type.
+        log.equal(shipped.verse, .body, "the shipped verse font")
+        log.equal(shipped.actSceneHeading, .headline, "the shipped act-heading font")
+        log.equal(shipped.sceneSetting, .subheadline, "the shipped scene-setting font")
+        log.equal(
+            shipped.speakerHeading, .caption.weight(.semibold),
+            "the shipped speaker-heading font")
+        log.equal(
+            shipped.direction, .callout.italic(), "the shipped stage-direction font")
+        log.equal(
+            shipped.gutterFont, .caption2.monospacedDigit(), "the shipped gutter font")
+
+        // And the other direction, which is what would catch the whole feature quietly
+        // becoming a no-op for the system face: a non-default step must *not* return the
+        // bare style.
+        log.check(
+            typeface(.large).verse != .body,
+            "the system face at the Large step still returns `Font.body`, so choosing a "
+                + "size does nothing")
+
+        // End-to-end through `size(_:)`'s rounding: a ladder whose steps round to the
+        // same point size is still a ladder, one that goes *down* somewhere is not.
+        for (smaller, bigger) in zip(
+            ReaderTextSize.allCases, ReaderTextSize.allCases.dropFirst())
+        {
+            let low = typeface(smaller)
+            let high = typeface(bigger)
+            log.check(
+                low.speechGap <= high.speechGap,
+                "the speech gap falls from \(smaller) (\(low.speechGap)) to "
+                    + "\(bigger) (\(high.speechGap))")
+        }
+
+        // What makes `SceneReaderView`'s `.onChange(of: typeface)` re-anchor the scroll
+        // position when only the size changed — and what would catch someone splitting
+        // the size back out into its own environment key, which would not fire it.
+        log.check(
+            typeface(.default) != typeface(.largest),
+            "two size steps of the same face compare equal, so a size change would not "
+                + "re-anchor the reader's scroll position")
+        log.check(
+            typeface(.large) == typeface(.large),
+            "the same face and size compare unequal, so every render would re-anchor")
+
+        // The same contract for the Dynamic Type category, which is stored on the
+        // typeface for the same reason and carries more weight: at a non-default step
+        // the system face is a *fixed*-size `Font.system(size:)`, so if a category
+        // change did not change this value the reader's Larger Text slider would stop
+        // doing anything at all.
+        log.check(
+            typeface(.large, at: .large) != typeface(.large, at: .accessibility5),
+            "two Dynamic Type categories compare equal, so the play text would not "
+                + "follow the reader's Larger Text setting")
+
+        // The two multipliers meet in `ReaderTypeface.scale`, and it is their *product*
+        // that sets the type: a per-family correction that is fine on its own can still
+        // land somewhere absurd at the top of the ladder.
+        let plausibleProducts: ClosedRange<CGFloat> = 0.7 ... 2.0
+        for font in ReaderFont.allCases {
+            for size in ReaderTextSize.allCases {
+                let product = font.opticalScale * size.multiplier
+                log.check(
+                    plausibleProducts.contains(product),
+                    "\(font) at \(size) scales the type by \(product), outside "
+                        + "\(plausibleProducts)")
+            }
         }
     }
 

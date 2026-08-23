@@ -35,6 +35,19 @@ struct ContentView: View {
     /// this window's frame.
     @AppStorage("readerFont") private var readerFont: ReaderFont = .system
 
+    /// How large that play text is set. Persisted the way `readerFont` is and for the
+    /// same reason it can be: a `String`-backed enum is `RawRepresentable`. Separate in
+    /// storage, because a reader who picks Baskerville does not want their size reset
+    /// with it.
+    @AppStorage("readerTextSize") private var readerTextSize: ReaderTextSize = .default
+
+    /// Read here, and only so that the reader's typeface is rebuilt when the reader
+    /// moves the Larger Text slider. At a non-default `readerTextSize` the play text is
+    /// drawn with a *fixed-size* `Font.system(size:)`, which does not follow Dynamic
+    /// Type on its own — `ReaderFont.systemSize(_:at:)` does the scaling instead, and it
+    /// needs the category to do it. Always `.large` on macOS.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     /// Off by default: the model name, the load check and the latency numbers are for
     /// working on the app, not for reading a play. Persisted the same way `readerFont`
     /// is, and forced on for a launch by `--diagnostics`.
@@ -255,7 +268,11 @@ struct ContentView: View {
             onRegenerate: { regenerate() },
             onStepScene: { step in stepScene(step, in: corpus) }
         )
-        .environment(\.readerTypeface, fonts.typeface(for: readerFont))
+        .environment(
+            \.readerTypeface,
+            fonts.typeface(
+                for: readerFont, textSize: readerTextSize,
+                dynamicTypeSize: dynamicTypeSize))
     }
 
     @ViewBuilder
@@ -435,8 +452,8 @@ struct ContentView: View {
         }
     }
 
-    /// The face the play is set in. Sits with the reader's own controls rather than
-    /// with the model capsule, because that is what it changes.
+    /// The face and size the play is set in. Sits with the reader's own controls rather
+    /// than with the model capsule, because that is what it changes.
     ///
     /// A `Menu` and **not** a `Picker`: picker rows are selection tags with nowhere to
     /// hang a download or a retry affordance, and a per-row `.font()` would not
@@ -448,7 +465,19 @@ struct ContentView: View {
     /// checkmark would therefore *displace* the status glyph on the selected row —
     /// which is precisely the row whose download state matters, since `choose(_:)`
     /// selects and downloads together. A `Toggle` puts the selection in the menu's own
-    /// state column and leaves the image slot for the status.
+    /// state column and leaves the image slot for the status. The size rows are
+    /// `Toggle`s for the same reason, so both groups mark selection the same way.
+    ///
+    /// Both sections are **titled**, which the single-group version of this menu was
+    /// not: two checkmarked groups with no headings do not say what either group is
+    /// choosing.
+    ///
+    /// No ⌘+ / ⌘− for the size. As `diagnosticsMenu` records, a `keyboardShortcut` on
+    /// an item inside a borderless-button `Menu` is not reliably registered, so the only
+    /// working shape is hidden zero-opacity buttons in the header — the
+    /// `SceneReaderView` pattern, where `.hidden()` explicitly does not work — and it
+    /// takes three of them (⌘-, ⌘= and ⌘+, since a Mac keyboard sends ⌘= for the
+    /// unshifted plus) for the least frequently changed preference in the app.
     ///
     /// Nothing is ever disabled. A disabled `NSMenuItem` shows no tooltip on macOS, so
     /// a greyed row with `.help()` attached would communicate nothing at all, and a row
@@ -456,19 +485,32 @@ struct ContentView: View {
     @ViewBuilder
     private var typefaceMenu: some View {
         Menu {
-            // `offered`, not `allCases`: the two iOS-only families would be dead rows
-            // on a Mac and Big Caslon and Garamond are unresolvable on a phone.
-            ForEach(ReaderFont.offered, id: \.self) { font in
-                Toggle(
-                    isOn: Binding(get: { font == readerFont }, set: { _ in choose(font) })
-                ) {
-                    if let glyph = statusGlyph(font) {
-                        Label(font.displayName, systemImage: glyph)
-                    } else {
-                        Text(font.displayName)
+            Section("Typeface") {
+                // `offered`, not `allCases`: the two iOS-only families would be dead
+                // rows on a Mac and Big Caslon and Garamond are unresolvable on a phone.
+                ForEach(ReaderFont.offered, id: \.self) { font in
+                    Toggle(
+                        isOn: Binding(
+                            get: { font == readerFont }, set: { _ in choose(font) })
+                    ) {
+                        if let glyph = statusGlyph(font) {
+                            Label(font.displayName, systemImage: glyph)
+                        } else {
+                            Text(font.displayName)
+                        }
                     }
+                    .help(fonts.failed[font] ?? "")
                 }
-                .help(fonts.failed[font] ?? "")
+            }
+
+            Section("Size") {
+                ForEach(ReaderTextSize.allCases, id: \.self) { size in
+                    Toggle(
+                        size.displayName,
+                        isOn: Binding(
+                            get: { size == readerTextSize }, set: { _ in readerTextSize = size })
+                    )
+                }
             }
         } label: {
             Image(systemName: "textformat")
@@ -478,8 +520,8 @@ struct ContentView: View {
         // label needs.
         .borderlessMenu()
         .fixedSize()
-        .help("The face the play is set in")
-        .accessibilityLabel("Reader typeface")
+        .help("The face and size the play is set in")
+        .accessibilityLabel("Reader typeface and size")
     }
 
     /// Brings the model capsule, the load check and the status strip back.

@@ -138,6 +138,66 @@ enum ReaderFont: String, CaseIterable, Sendable {
         #endif
     }
 
+    /// The same measurement **at the category actually in force**, which is what the
+    /// *system* face has to be scaled against at a non-default `ReaderTextSize`.
+    ///
+    /// Two measurements and not one, because the two font constructors behave
+    /// differently and neither is documented as doing so:
+    ///
+    /// - `Font.custom(_:size:relativeTo:)` scales the size it is handed, so it wants
+    ///   the `.large` measurement above.
+    /// - `Font.system(size:)` does **not**. Measured on the Simulator across the
+    ///   `--selftest` ladder: at `.large` the verse read 22.3pt tall at Default and
+    ///   24.0pt at the Large step; at xxxLarge the Default reading grew to 30.3pt and
+    ///   the Large one was still 24.0pt. A fixed-size system font is frozen, so
+    ///   choosing any size step would have taken the reader's accessibility setting
+    ///   away from them. The scaling therefore has to happen here, from the category
+    ///   in force.
+    ///
+    /// Measuring each style separately rather than scaling one body size also means the
+    /// system face keeps each style's own metric curve, so the caption-derived speaker
+    /// heading holds its proportion against the verse at accessibility sizes instead of
+    /// growing at the body's rate.
+    fileprivate static func systemSize(
+        _ style: Font.TextStyle, at dynamicTypeSize: DynamicTypeSize
+    ) -> CGFloat {
+        #if os(macOS)
+        // macOS has no Dynamic Type at all: `DynamicTypeSize` there is always `.large`,
+        // so this is the measurement above, and the two paths cannot diverge.
+        systemSize(style)
+        #else
+        PlatformFont.preferredFont(
+            forTextStyle: platformStyle(style),
+            compatibleWith: UITraitCollection(
+                preferredContentSizeCategory: contentSizeCategory(dynamicTypeSize))
+        ).pointSize
+        #endif
+    }
+
+    #if !os(macOS)
+    /// `DynamicTypeSize` and `UIContentSizeCategory` are the same ladder in two types,
+    /// and SwiftUI ships no conversion between them.
+    private static func contentSizeCategory(
+        _ size: DynamicTypeSize
+    ) -> UIContentSizeCategory {
+        switch size {
+        case .xSmall: .extraSmall
+        case .small: .small
+        case .medium: .medium
+        case .large: .large
+        case .xLarge: .extraLarge
+        case .xxLarge: .extraExtraLarge
+        case .xxxLarge: .extraExtraExtraLarge
+        case .accessibility1: .accessibilityMedium
+        case .accessibility2: .accessibilityLarge
+        case .accessibility3: .accessibilityExtraLarge
+        case .accessibility4: .accessibilityExtraExtraLarge
+        case .accessibility5: .accessibilityExtraExtraExtraLarge
+        @unknown default: .large
+        }
+    }
+    #endif
+
     /// `NSFont.TextStyle` and `UIFont.TextStyle` spell every case the same, so this
     /// mapping is written once against `PlatformFont`.
     private static func platformStyle(_ style: Font.TextStyle) -> PlatformFont.TextStyle {
@@ -183,14 +243,46 @@ struct ReaderTypeface: Equatable, Sendable {
     /// stage direction in the scene.
     private let hasItalicFace: Bool
 
-    init(_ font: ReaderFont, installed: Set<String>) {
+    /// The reader's size step, carried here rather than in a second environment key.
+    ///
+    /// `SceneReaderView` re-anchors the scroll position off `.onChange(of: typeface)`,
+    /// precisely because changing the type shifts point-based scroll offsets. Putting
+    /// the step on this already-`Equatable` value gets that re-anchor for free; a
+    /// separate key would not fire it, and every size change would drift the reader off
+    /// their line.
+    ///
+    /// Named `textSize` and not `size`, so it cannot be confused with the `size(_:)`
+    /// method below, which answers in points.
+    let textSize: ReaderTextSize
+
+    /// The content size category in force, which only the system face needs and only at
+    /// a non-default `textSize`: `Font.system(size:)` is fixed, so nothing else would
+    /// scale the verse when the reader moves the Larger Text slider. See
+    /// `ReaderFont.systemSize(_:at:)`, which is where that was measured.
+    ///
+    /// Stored here, alongside `textSize`, for the same reason: `SceneReaderView`
+    /// re-anchors off `.onChange(of: typeface)`, and a category change moves the type
+    /// exactly as a size step does. Always `.large` on macOS.
+    let dynamicTypeSize: DynamicTypeSize
+
+    /// No default argument for `textSize` or `dynamicTypeSize`. There are exactly two
+    /// construction sites, so being explicit costs two arguments and buys a compiler
+    /// error at any new one — and a silently defaulted `dynamicTypeSize` is precisely
+    /// the bug that froze the accessibility control before it was threaded through.
+    init(
+        _ font: ReaderFont, textSize: ReaderTextSize, dynamicTypeSize: DynamicTypeSize,
+        installed: Set<String>
+    ) {
         let resolved = font.familyName.flatMap { installed.contains($0) ? $0 : nil }
         self.font = font
         self.familyName = resolved
         self.hasItalicFace = resolved == nil || font.hasItalicFace
+        self.textSize = textSize
+        self.dynamicTypeSize = dynamicTypeSize
     }
 
-    static let system = ReaderTypeface(.system, installed: [])
+    static let system = ReaderTypeface(
+        .system, textSize: .default, dynamicTypeSize: .large, installed: [])
 
     // MARK: - Roles
 
@@ -199,34 +291,48 @@ struct ReaderTypeface: Equatable, Sendable {
         // look exactly. A custom face cannot use weight (see `ReaderFont`), so a
         // step up in size plus the letterspacing below is what holds the heading
         // apart from the verse under it.
-        guard let familyName else { return .headline }
+        guard let familyName else {
+            // `.semibold` restated by hand: it is part of `.headline` and not part of
+            // the point size, so a bare `Font.system(size:)` would draw the act
+            // heading in the same weight as the verse.
+            return textSize.isDefault ? .headline : system(.headline, weight: .semibold)
+        }
         return custom(familyName, .title3)
     }
 
     /// Letterspacing for the heading, which is a separate value because tracking is
     /// a `Text` modifier and not something a `Font` carries. Zero for the system
     /// face, again so the default is untouched.
-    var actSceneTracking: CGFloat { familyName == nil ? 0 : 0.8 }
+    var actSceneTracking: CGFloat {
+        (familyName == nil ? 0 : 0.8) * textSize.multiplier
+    }
 
     var sceneSetting: Font {
-        guard let familyName else { return .subheadline }
+        guard let familyName else {
+            return textSize.isDefault ? .subheadline : system(.subheadline)
+        }
         return custom(familyName, .subheadline)
     }
 
     var speakerHeading: Font {
         // Semibold for the system face only. In a one-face family the caps, the
         // tracking, and `.secondary` are what make this read as a label.
-        guard let familyName else { return .caption.weight(.semibold) }
+        guard let familyName else {
+            return textSize.isDefault
+                ? .caption.weight(.semibold) : system(.caption, weight: .semibold)
+        }
         return custom(familyName, .caption)
     }
 
     var verse: Font {
-        guard let familyName else { return .body }
+        guard let familyName else { return textSize.isDefault ? .body : system(.body) }
         return custom(familyName, .body)
     }
 
     var direction: Font {
-        guard let familyName else { return .callout.italic() }
+        guard let familyName else {
+            return textSize.isDefault ? .callout.italic() : system(.callout, italic: true)
+        }
         guard hasItalicFace else { return Self.oblique(familyName, size: size(.callout)) }
         return custom(familyName, .callout).italic()
     }
@@ -237,13 +343,40 @@ struct ReaderTypeface: Equatable, Sendable {
 
     /// Serif capitals are already wide, so they need less letterspacing than SF's to
     /// read as a label rather than as a word.
-    var speakerTracking: CGFloat { familyName == nil ? 0.6 : 0.4 }
+    var speakerTracking: CGFloat {
+        (familyName == nil ? 0.6 : 0.4) * textSize.multiplier
+    }
+
+    /// The stage-direction indent, which lives here rather than in `LineRow` because a
+    /// printed edition sets it in ems: 28pt against 17pt type is not the same indent as
+    /// 28pt against 26pt type.
+    var directionIndent: CGFloat { (28 * scale).rounded() }
+
+    /// The line-number gutter's font, which stays on the system face for its
+    /// monospaced digits but does scale with the reader's step: a 10pt number beside
+    /// 20pt verse reads as a bug rather than as restraint.
+    var gutterFont: Font {
+        textSize.isDefault ? .caption2.monospacedDigit() : system(.caption2).monospacedDigit()
+    }
+
+    /// The gutter's width, which moves with `gutterFont` and never on its own: the
+    /// width is a budget for three digits' advances, so scaling the font without it is
+    /// the clipping case.
+    ///
+    /// `textSize.multiplier` and not `scale`, because the gutter is not in the reader's
+    /// chosen family and so has no optical correction to apply.
+    var gutterWidth: CGFloat { (30 * textSize.multiplier).rounded() }
 
     // MARK: - Sizing
 
-    /// 1.0 whenever the play is being drawn in the system face, whether that is the
-    /// reader's choice or a download still in flight.
-    private var scale: CGFloat { familyName == nil ? 1 : font.opticalScale }
+    /// The product of two independent corrections: `opticalScale` makes a family read
+    /// at the size SF does and is none of the reader's business, while
+    /// `textSize.multiplier` is the only one they chose. The optical half stays 1.0 for
+    /// the system face and for a download in flight; the reader's half applies in both
+    /// cases, which is the feature.
+    private var scale: CGFloat {
+        (familyName == nil ? 1 : font.opticalScale) * textSize.multiplier
+    }
 
     /// Rounded, so the verse keeps landing on the baseline grid the number gutter is
     /// aligned to.
@@ -251,11 +384,40 @@ struct ReaderTypeface: Equatable, Sendable {
         (ReaderFont.systemSize(style) * scale).rounded()
     }
 
+    /// `size(_:)`'s twin for the system face, which has to do its own Dynamic Type
+    /// scaling. Same rounding, different measurement — see `system(_:weight:italic:)`.
+    private func systemFaceSize(_ style: Font.TextStyle) -> CGFloat {
+        (ReaderFont.systemSize(style, at: dynamicTypeSize) * scale).rounded()
+    }
+
     /// `relativeTo:` is what makes the verse follow Dynamic Type, and it does not
     /// double-scale *because* `systemSize(_:)` is measured at `.large`. See the note
     /// there, which is the load-bearing half of this pair.
     private func custom(_ family: String, _ style: Font.TextStyle) -> Font {
         .custom(family, size: size(style), relativeTo: style)
+    }
+
+    /// The system face at a non-default step, which is the only reason this exists:
+    /// `Font.body` is a *text style*, not a point size, and there is no arithmetic to
+    /// do to it. Two things about it are worth knowing.
+    ///
+    /// - It is not what the default path uses, and the two are not interchangeable.
+    ///   `Font.body` and `Font.system(size: 17)` are different values even where they
+    ///   resolve to the same 17 points — the first follows Dynamic Type and the second
+    ///   does not — so every role short-circuits to the bare style at `.default` rather
+    ///   than routing through here with a multiplier of 1.
+    /// - The size comes from `systemFaceSize(_:)` and **not** from `size(_:)`, because
+    ///   `Font.system(size:)` will not scale it afterwards. That asymmetry with
+    ///   `custom(_:_:)` is the whole content of `ReaderFont.systemSize(_:at:)`'s note.
+    ///
+    /// Naming SF's private dot-prefixed family to `Font.custom` in order to get
+    /// `relativeTo:` here instead is rejected for the reason in `familyName`'s comment:
+    /// this app has no business naming the system family.
+    private func system(
+        _ style: Font.TextStyle, weight: Font.Weight = .regular, italic: Bool = false
+    ) -> Font {
+        let font = Font.system(size: systemFaceSize(style), weight: weight)
+        return italic ? font.italic() : font
     }
 
     /// A synthetic italic for a family with no italic cut, which is Big Caslon,
@@ -268,6 +430,11 @@ struct ReaderTypeface: Equatable, Sendable {
     /// CoreText's Swift shim `CTFont.init(_:transform:)` hard-codes size 1.0 and
     /// expects the matrix to carry the scale, so that convenience initializer
     /// silently yields a one-point font.
+    ///
+    /// A `Font` built from a `CTFont` does not participate in Dynamic Type, so this is
+    /// the one role that ignores it — it still follows the reader's size step, which
+    /// arrives baked into `size`. Harmless: Big Caslon is macOS-only, and macOS is
+    /// pinned at `.large`.
     private static func oblique(_ family: String, size: CGFloat) -> Font {
         let descriptor = CTFontDescriptorCreateWithAttributes(
             [kCTFontFamilyNameAttribute: family] as CFDictionary)

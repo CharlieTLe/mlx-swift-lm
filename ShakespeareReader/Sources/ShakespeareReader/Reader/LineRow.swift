@@ -30,18 +30,22 @@ struct LineRow: View {
     @Environment(\.readerTypeface) private var typeface
 
     /// Verse indent. Speech lines hang under their heading; directions sit further
-    /// in and in italic, the way a printed edition sets them.
-    private var indent: CGFloat { line.isDirection ? 28 : 0 }
+    /// in and in italic, the way a printed edition sets them. The measure itself is
+    /// the typeface's, because it is proportional to the type it indents.
+    private var indent: CGFloat { line.isDirection ? typeface.directionIndent : 0 }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(numberLabel)
-                // Stays on the system face whatever the play is set in: a serif
-                // family has no monospaced digits, and the `.frame(width: 30)`
-                // below depends on stable advances to keep the gutter aligned.
-                .font(.caption2.monospacedDigit())
+                // The *face* stays the system's whatever the play is set in, because a
+                // serif family has no monospaced digits. The *size* does not: it
+                // follows the reader's step, so the numbers stay legible beside the
+                // verse. Font and width come from the typeface together and never one
+                // without the other — the width is a budget for three digits'
+                // advances, so a bigger font in a fixed frame is the clipping case.
+                .font(typeface.gutterFont)
                 .foregroundStyle(.tertiary)
-                .frame(width: 30, alignment: .trailing)
+                .frame(width: typeface.gutterWidth, alignment: .trailing)
 
             VStack(alignment: .leading, spacing: 2) {
                 if line.startsSpeech, let display {
