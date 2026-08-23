@@ -33,19 +33,23 @@ shakespeare-reader &
 The `brew trust` step is not optional: recent Homebrew refuses to load a formula from
 a third-party tap until you trust it, and `brew tap` does not say so.
 
-There is no `.app` bundle, so the command launches the window and holds the terminal
-until you quit it; `&` gives the shell back.
+The Homebrew build is not a `.app` bundle, so the command launches the window and holds
+the terminal until you quit it; `&` gives the shell back. For a double-clickable Mac app,
+build the Xcode project instead; see [As a Mac app](#as-a-mac-app).
 
 The formula builds from source and the source includes MLX, so this is a compile rather
 than a download: about two minutes and 1.6 GB of scratch on an M4 Max, longer on fewer
-cores or on a first build, which also clones fourteen packages. It needs:
+cores or on a first build, which also clones fourteen packages. Every build here needs
+the same two things, whether it comes from Homebrew, `swift run`, or the Xcode project:
 
 - **Apple silicon.** MLX has no Intel path.
 - **A full Xcode**, selected with `xcode-select`, with the **Metal toolchain**
   component installed. The Command Line Tools ship a `metal` that is a stub and
   cannot compile mlx-swift's GPU kernels; a build without them links and launches
   and then fails on the first annotation with `Failed to load the default metallib`.
-  The formula checks for this before building rather than shipping that binary.
+  The formula checks for this before building rather than shipping that binary, and
+  the Xcode build does not, so it is worth checking by hand before the first Mac or
+  iPhone run.
 
   ```bash
   xcodebuild -showComponent MetalToolchain      # want: Status: installed
@@ -66,31 +70,82 @@ swift run -c release ShakespeareReader
 
 Use `-c release`; a debug 4B forward pass is not worth watching.
 
-### On iPhone
+Both app bundles, Mac and iPhone, come out of one project and one scheme:
 
 ```bash
 open ShakespeareReader/App/ShakespeareReader.xcodeproj
 ```
 
-Pick your team under **Signing & Capabilities**, change the bundle id
-(`com.charliele.ShakespeareReader`) to one your team owns, and Run. iPhone only, iOS 18.0
-and up; there is no iPad or visionOS layout.
-
-The checked-in project sets **no** `DEVELOPMENT_TEAM`, so nobody inherits anyone else's.
-`App/Signing.xcconfig` is the base configuration for both build configurations and does
-nothing but optionally include `App/Local.xcconfig`, which is gitignored. Put your team
-there to keep it out of `git status` entirely, and to build from the command line:
+Pick a destination and Run. The checked-in project sets **no** `DEVELOPMENT_TEAM`, so
+nobody inherits anyone else's. `App/Signing.xcconfig` is the base configuration for both
+build configurations and does nothing but optionally include `App/Local.xcconfig`, which
+is gitignored. Put your team there to keep it out of `git status` entirely, and to build
+from the command line:
 
 ```
 DEVELOPMENT_TEAM = ABCDE12345
 ```
 
-The entitlements file asks for one thing, `com.apple.developer.kernel.increased-memory-limit`,
+Only the iPhone build *requires* a team. My Mac needs none, for the reason the next
+section gives.
+
+### As a Mac app
+
+Choose **My Mac** and Run. macOS 14.0 and up.
+
+**No Apple Developer team, and no bundle-id change.** macOS signs a local build ad hoc,
+so a fresh clone with `DEVELOPMENT_TEAM` unset builds and launches as-is. That is the
+sharp contrast with the iPhone section below, where a device build needs both.
+
+**Apple silicon only, explicitly.** The target pins `ARCHS[sdk=macosx*] = arm64`. That is
+not belt-and-braces: `ARCHS_STANDARD` for macosx is still `arm64 x86_64`, and
+`ONLY_ACTIVE_ARCH` is set only in Debug, so a Release build would otherwise try an x86_64
+slice of the vendored MLX C++ and metal-cpp and MLX has no Intel path. The iPhone build
+never met this because its `ARCHS_STANDARD` is arm64 alone.
+
+There is no app icon yet, so the Dock shows the generic one. No asset catalog exists
+anywhere in the project, and a `CFBundleIconName` naming a file that is not there buys a
+warning and still no icon.
+
+Two things to know about the bundled app versus the Homebrew build, which matter because
+both can be installed at once and are then two different Mac apps on one machine:
+
+- **The caches are shared.** Both use `~/.cache/huggingface/hub` for the 2.2 GB of
+  weights and the same absolute `~/Library/Application Support/ShakespeareReader/` for
+  the annotation cache. Whichever you run first pays the download; the other starts warm.
+- **The preferences are not.** Reading position, `readerFont` and `showsCommentary` do
+  **not** carry across. The unbundled Homebrew executable has no bundle identifier, so
+  CFPreferences falls back to the process name and it writes
+  `~/Library/Preferences/ShakespeareReader.plist`; the bundled app uses its bundle id,
+  `com.charliele.ShakespeareReader`. So "it forgot my place but kept my annotations" is
+  expected, not a bug:
+
+  ```bash
+  defaults read ShakespeareReader               # the Homebrew / swift run build
+  defaults read com.charliele.ShakespeareReader # the bundled Mac app
+  ```
+
+**App Sandbox is deliberately off**, and the Mac build signs against its own empty
+`App/ShakespeareReader-macOS.entitlements` rather than the iPhone file. Sandboxing would
+redirect `~/.cache/huggingface` into `~/Library/Containers/` and re-download 2.2 GB that
+is already on disk; that file's own comment records this, along with why hardened
+runtime needs no JIT exception. `FoundationModelsIntegration` is on here for the same
+reason it is on for iPhone, described under [On iPhone](#on-iphone) below.
+
+### On iPhone
+
+Pick your team under **Signing & Capabilities**, change the bundle id
+(`com.charliele.ShakespeareReader`) to one your team owns, and Run. iPhone only, iOS 18.0
+and up; there is no iPad or visionOS layout.
+
+The iPhone entitlements file, `App/ShakespeareReader-iOS.entitlements`, asks for one
+thing, `com.apple.developer.kernel.increased-memory-limit`,
 which raises the jetsam ceiling a 4B model needs and which a free personal team can grant.
 It does *not* ask for `extended-virtual-addressing`: personal teams cannot sign that one at
 all, and it only buys an address space past roughly 4 GB, where the measured peak working
 set here is 3.31 GB. Note that a personal team's profile expires in about seven days, after
-which the app stops launching until you rebuild it.
+which the app stops launching until you rebuild it. None of this applies to the Mac build,
+which asks for nothing.
 
 Same code, same corpus, same model. First launch downloads the same 2.2 GB of
 `mlx-community/Qwen3-4B-4bit`, and the header's percentage is the only thing to watch
@@ -124,10 +179,10 @@ sheet rises when a passage is selected and is gone when it is swiped away, so th
 Three divergences worth knowing about before they look like bugs:
 
 - **`FoundationModelsIntegration` is on.** The Xcode project model has no way to express
-  `traits: []`, so unlike the SwiftPM build described under Notes below, this one
-  compiles `MLXFoundationModels`. The app never calls into it and the whole target is
-  behind `@available(iOS 27.0, *)` plus `#if canImport(FoundationModels)`, so the cost is
-  build time, not behaviour.
+  `traits: []`, so unlike the SwiftPM build described under Notes below, *both* Xcode
+  destinations compile `MLXFoundationModels`. The app never calls into it and the whole
+  target is behind `@available(iOS 27.0, macOS 27.0, visionOS 27.0, *)` plus
+  `#if canImport(FoundationModels)`, so the cost is build time, not behaviour.
 - **The typefaces are not the same three.** Of Caslon, Baskerville and Garamond, iOS
   ships only Baskerville: there is no iOS Big Caslon, and Garamond is not in an iOS
   downloadable font catalog. The menu offers Baskerville, Hoefler Text and Palatino
@@ -447,6 +502,17 @@ shakespeare-reader --selftest      # "selftest: all checks passed"
 shakespeare-reader --metal-check   # "metal: ok"
 ```
 
+So does the bundled Mac app, by running the executable inside it rather than `open`ing it:
+
+```bash
+ShakespeareReader.app/Contents/MacOS/ShakespeareReader --selftest
+ShakespeareReader.app/Contents/MacOS/ShakespeareReader --metal-check
+```
+
+Every flag works unchanged in a bundle. `EntryPoint.main()` handles them and exits before
+`ShakespeareReaderApp.main()`, so no window opens, and `Bundle.main` still resolves to the
+enclosing `.app` because CFBundle walks up from the executable path to find it.
+
 `--diagnostics` does not write the preference, so it is the way to look at the numbers
 once without turning them on for good; `--benchmark` is still how the table above is
 produced.
@@ -529,9 +595,19 @@ prints the replacement.
   checkout. It sets `traits: []` on that dependency, which turns off the default
   `FoundationModelsIntegration` trait: the app never touches Apple's FoundationModels
   adapter, and `MLXHuggingFace` pulls that target in only when the trait is on.
-- **The iOS app target compiles the same sources directly**, from
-  `App/ShakespeareReader.xcodeproj`; `Package.swift` is untouched and the local package is
-  not in the iOS build graph. `Annotation/`, `Corpus/`, `Reader/` and `Platform/` are
+- **The Xcode app target compiles the same sources directly**, from
+  `App/ShakespeareReader.xcodeproj`. It is **one multiplatform target**, not one per
+  platform: `SDKROOT = auto`, `SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"`,
+  and the whole platform difference carried by per-SDK `INFOPLIST_FILE` and
+  `CODE_SIGN_ENTITLEMENTS` (plus `ARCHS[sdk=macosx*]`). A second target would have
+  duplicated all three build phases, the four synchronized groups and the six package
+  product dependencies, and needed a second scheme, to express a difference that is
+  four build settings. The sources were already shared, since `#if os(macOS)` has
+  carried both layouts from the start. Note that the *sibling* `Package.swift` is what
+  is outside this project's build graph; the *root* package of the enclosing checkout is
+  very much inside it, as a local package reference, which is why the Xcode builds
+  compile `MLXFoundationModels` and the SwiftPM one does not. `Annotation/`, `Corpus/`,
+  `Reader/` and `Platform/` are
   file-system-synchronized groups, so adding a file to any of them needs no project edit.
   The four top-level `.swift` files are listed individually, though, so a *new* top-level
   file or a new subdirectory does need one. That split is deliberate. A single synchronized group over
@@ -550,7 +626,11 @@ prints the replacement.
   `$(brew --prefix)/opt/shakespeare-reader/libexec`, which is why the formula installs
   the binary and all four resource bundles there and puts a wrapper script in `bin`
   rather than a symlink: a symlink would make the app look for its corpus and its GPU
-  kernels in `bin`.
+  kernels in `bin`. In the bundled Mac app neither is beside the executable: both
+  `Plays/` and `mlx-swift_Cmlx.bundle` land in `Contents/Resources` while the binary
+  sits in `Contents/MacOS`, so `CorpusLoader` goes through `Bundle.main` instead, and
+  mlx finds its `default.metallib` through its own `Bundle.allBundles` fallback rather
+  than by colocation.
 
 ## Corpus provenance
 

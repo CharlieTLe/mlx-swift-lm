@@ -21,10 +21,17 @@ struct ReadingProgress: Codable, Sendable, Equatable {
 ///
 /// `UserDefaults` rather than JSON beside the annotation cache: the record is one
 /// small value, and it belongs with the window frame and `readerFont` rather than
-/// with generated model output a reader might reasonably want to delete. The app is
-/// an unbundled SwiftPM executable with no bundle id, but CFPreferences falls back to
-/// the process name, so this lands in `~/Library/Preferences/ShakespeareReader.plist`
-/// alongside those.
+/// with generated model output a reader might reasonably want to delete.
+///
+/// Which preferences domain that is depends on how the app was built, and the two Mac
+/// builds do not share one. The unbundled SwiftPM executable has no bundle id, but
+/// CFPreferences falls back to the process name, so it lands in
+/// `~/Library/Preferences/ShakespeareReader.plist`; the bundled Mac and iPhone apps use
+/// `com.charliele.ShakespeareReader`. So a reader running both Mac builds on one machine
+/// shares the model and annotation caches but not their place in the play. That is
+/// documented in the README rather than papered over with an explicit suite name: the
+/// bundle id is the correct domain for a bundled app, and pinning both to the process
+/// name would be the tail wagging the dog.
 ///
 /// **Not** `@AppStorage`. Nothing renders from the record: it is read once at launch
 /// and written thereafter, so the observation `@AppStorage` provides buys nothing. It

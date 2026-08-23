@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- Empty on purpose. The Mac app asks for nothing, and the empty dict is the point of
+     the file: `codesign` reads it through CFPropertyList, so this comment costs the
+     signature nothing while keeping the reasoning next to the decision.
+
+     1. The iOS twin's `com.apple.developer.kernel.increased-memory-limit` has no macOS
+        equivalent, and no macOS provisioning profile grants it. It is not needed: the
+        48 GB ceiling `AnnotationService.tuneMemory` sets on macOS requires no
+        entitlement at all.
+
+     2. App Sandbox is off deliberately, and this is the sharp edge. On macOS
+        `AnnotationService.downloader` takes swift-huggingface's default,
+        `~/.cache/huggingface/hub`, shared with every other MLX tool and with Python's
+        `huggingface_hub`. Sandboxing redirects that into `~/Library/Containers/`, so
+        the first launch re-downloads 2.2 GB of weights already sitting on disk.
+        Ticking "App Sandbox" in Signing & Capabilities is the fix that breaks this.
+
+        This is also why the file exists at all rather than
+        `"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = ""`: an empty string can carry no
+        comment. A real per-SDK file additionally keeps Signing & Capabilities honest,
+        editing *this* file when My Mac is selected instead of writing an unconditional
+        setting that leaks a Mac capability into the iOS build.
+
+     3. Hardened runtime is on (`ENABLE_HARDENED_RUNTIME`) and needs no exception. It
+        restricts code injection, library loading, JIT and debugger attachment, never
+        filesystem access, so `~/.cache/huggingface` behaves exactly as it does for the
+        unbundled Homebrew build. MLX does compile Metal libraries at runtime (`Cmlx`
+        builds `jit_kernels.cpp`), but through `MTLDevice.makeLibrary(source:)` and the
+        out-of-process Metal compiler: no `MAP_JIT` pages, so no
+        `com.apple.security.cs.allow-jit`. Debug builds still get `get-task-allow`
+        merged in by `CODE_SIGN_INJECT_BASE_ENTITLEMENTS`, so lldb attaches. -->
+<dict/>
+</plist>

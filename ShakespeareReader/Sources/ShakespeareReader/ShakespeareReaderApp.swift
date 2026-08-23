@@ -144,8 +144,10 @@ struct ShakespeareReaderApp: App {
         // An unbundled SwiftPM executable launches as an accessory process, which
         // gets no focused window and no menu bar. Promote it to a regular app.
         //
-        // Nothing to do in the iOS app: it is a real bundle, launched by the system
-        // as a foreground application, so there is no accessory state to escape.
+        // Nothing to do in a bundled app, Mac or iPhone: it is launched by the system
+        // as a foreground application, so there is no accessory state to escape. Both
+        // calls are harmless there, so this stays unconditional on macOS rather than
+        // growing a bundled/unbundled test.
         #if os(macOS)
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
