@@ -103,9 +103,18 @@ not belt-and-braces: `ARCHS_STANDARD` for macosx is still `arm64 x86_64`, and
 slice of the vendored MLX C++ and metal-cpp and MLX has no Intel path. The iPhone build
 never met this because its `ARCHS_STANDARD` is arm64 alone.
 
-There is no app icon yet, so the Dock shows the generic one. No asset catalog exists
-anywhere in the project, and a `CFBundleIconName` naming a file that is not there buys a
-warning and still no icon.
+There is an app icon: the Chandos portrait, cropped to the head and the ruff collar,
+`App/Assets.xcassets/AppIcon.appiconset` for the ten macOS sizes and the iOS 1024.
+`ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon` is the whole of the wiring — actool writes
+`CFBundleIconName`, `CFBundleIconFile` and an `AppIcon.icns` into the built bundle itself,
+so neither `Info-macOS.plist` nor `Info-iOS.plist` names the icon and neither should. The
+PNGs are checked in; `swift tools/icon/make_icon.swift` regenerates them.
+
+The crop is the part that took a decision rather than a build setting. At 128pt any
+square of the painting works, and at 16pt the full canvas is a dark smudge: the head sits
+in the upper third and the face is a few pixels of it. Cropping to head-plus-collar keeps
+the one high-contrast shape that survives the downsample, which is the white ruff, not the
+face. The generator carries the four candidates it was chosen from.
 
 Two things to know about the bundled app versus the Homebrew build, which matter because
 both can be installed at once and are then two different Mac apps on one machine:
@@ -684,6 +693,19 @@ prints the replacement.
   sits in `Contents/MacOS`, so `CorpusLoader` goes through `Bundle.main` instead, and
   mlx finds its `default.metallib` through its own `Bundle.allBundles` fallback rather
   than by colocation.
+- **The unbundled build sets its Dock tile from code.** An asset catalog is only ever
+  read out of a bundle, so the `.app` gets its icon with the process uninvolved and a
+  bare SwiftPM binary — `swift run`, or the Homebrew install — gets the generic
+  unbundled-executable tile no matter how complete the catalog is.
+  `ShakespeareReaderApp.init()` therefore loads `Resources/AppIcon.png` out of
+  `Bundle.module` and assigns `NSApplication.shared.applicationIconImage`, next to the
+  `setActivationPolicy(.regular)` that gives the process a tile to put it on in the first
+  place. The visible cost is that the icon appears a beat after the tile does. It is
+  guarded on `Bundle.main.bundleIdentifier == nil` rather than on `#if SWIFT_PACKAGE`
+  alone: the `#if` is what makes `Bundle.module` exist, but a SwiftPM binary run from
+  inside a hand-assembled `.app` has a bundle whose catalog icon is the better one.
+  Missing identifier is the test that actually means "no bundle behind me", and the same
+  one behind the split preferences above.
 
 ## Corpus provenance
 
@@ -692,3 +714,12 @@ all three are public domain in the United States. Each JSON file records the ebo
 the URL, the retrieval date, and the SHA-256 of the source text as downloaded. See
 `Sources/ShakespeareReader/Resources/Plays/NOTICE.md`, which also records the scene-0
 decision behind the two Prologues.
+
+## Icon provenance
+
+The icon is the Chandos portrait, attributed to John Taylor, c. 1600–1610, National
+Portrait Gallery NPG 1. The painting is long out of copyright and a faithful photographic
+reproduction of a flat public-domain work carries no separate copyright in the United
+States, which is why the scan is checked in at `tools/icon/chandos-portrait.jpg` rather
+than fetched at build time. `tools/icon/NOTICE.md` records its dimensions and SHA-256, so
+the crop is auditable against a specific scan the way each play's is.

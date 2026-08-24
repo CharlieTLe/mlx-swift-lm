@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		1A000000000000000000000C /* Plays in Resources */ = {isa = PBXBuildFile; fileRef = 1A000000000000000000000B /* Plays */; };
+		1A0000000000000000000104 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1A0000000000000000000103 /* Assets.xcassets */; };
 		1A000000000000000000001E /* MLXLLM in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0000000000000000000018 /* MLXLLM */; };
 		1A000000000000000000001F /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = 1A0000000000000000000019 /* MLXVLM */; };
 		1A0000000000000000000020 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = 1A000000000000000000001A /* MLXLMCommon */; };
@@ -32,6 +33,7 @@
 		1A0000000000000000000100 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		1A0000000000000000000101 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		1A0000000000000000000102 /* ShakespeareReader-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ShakespeareReader-macOS.entitlements"; sourceTree = "<group>"; };
+		1A0000000000000000000103 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -103,6 +105,7 @@
 				1A000000000000000000000E /* ShakespeareReader-iOS.entitlements */,
 				1A0000000000000000000102 /* ShakespeareReader-macOS.entitlements */,
 				1A0000000000000000000100 /* Signing.xcconfig */,
+				1A0000000000000000000103 /* Assets.xcassets */,
 				1A000000000000000000000B /* Plays */,
 			);
 			name = App;
@@ -201,6 +204,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1A0000000000000000000104 /* Assets.xcassets in Resources */,
 				1A000000000000000000000C /* Plays in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -300,6 +304,7 @@
 			baseConfigurationReference = 1A0000000000000000000100 /* Signing.xcconfig */;
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphone*]" = "ShakespeareReader-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "ShakespeareReader-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
@@ -332,6 +337,7 @@
 			baseConfigurationReference = 1A0000000000000000000100 /* Signing.xcconfig */;
 			buildSettings = {
 				"ARCHS[sdk=macosx*]" = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphone*]" = "ShakespeareReader-iOS.entitlements";
 				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = "ShakespeareReader-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;

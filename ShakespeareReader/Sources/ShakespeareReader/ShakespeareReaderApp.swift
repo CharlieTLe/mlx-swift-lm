@@ -151,8 +151,39 @@ struct ShakespeareReaderApp: App {
         #if os(macOS)
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        Self.setUnbundledDockIcon()
         #endif
     }
+
+    #if os(macOS)
+    /// Puts the portrait on the Dock tile of an unbundled build.
+    ///
+    /// The `.app` needs none of this. `App/Assets.xcassets` compiles to an `Assets.car`
+    /// and a `CFBundleIconName`, and the Dock, Finder, Spotlight and Cmd-Tab all read
+    /// that straight out of the bundle without the process being consulted. A bare
+    /// SwiftPM executable has no bundle to read, so it takes the generic
+    /// unbundled-executable tile however complete the asset catalog is, and
+    /// `applicationIconImage` is the only way to change it — which also means the icon
+    /// appears a moment after launch rather than the instant the tile does.
+    ///
+    /// Guarded on the nil bundle identifier rather than on `#if SWIFT_PACKAGE` alone,
+    /// because those are not the same question. The `#if` is needed for `Bundle.module`
+    /// to exist at all — Xcode does not synthesize it for the app target, and does not
+    /// define `SWIFT_PACKAGE` there — but a SwiftPM-built binary can still be run from
+    /// inside a `.app` someone assembled around it, where `Bundle.main` resolves to the
+    /// enclosing bundle and the catalog's icon is the better one. Missing identifier is
+    /// what actually means "no bundle behind me", and is the same test the README's note
+    /// about split preferences turns on.
+    private static func setUnbundledDockIcon() {
+        #if SWIFT_PACKAGE
+        guard Bundle.main.bundleIdentifier == nil,
+            let url = Bundle.module.url(forResource: "AppIcon", withExtension: "png"),
+            let icon = NSImage(contentsOf: url)
+        else { return }
+        NSApplication.shared.applicationIconImage = icon
+        #endif
+    }
+    #endif
 
     // `SwiftUI.Scene` in full: this app's corpus has its own `Scene` type, and an
     // unqualified `some Scene` resolves to that one.

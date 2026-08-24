@@ -56,12 +56,22 @@ let package = Package(
             // bundle so CorpusLoader can enumerate it. Adding a play is then
             // dropping a JSON file in, with no edit here.
             //
+            // `AppIcon.png` rides along for the same reason `.copy` suits it — there is
+            // nothing for `.process` to do to a PNG outside Xcode — and exists only for
+            // the unbundled build: a bare SwiftPM executable has no bundle for the Dock
+            // to read an icon out of, so `ShakespeareReaderApp` sets the tile from this
+            // file at launch. The `.app` takes its icon from `App/Assets.xcassets`
+            // instead and never opens this copy.
+            //
             // `Bundle.module` in an *executable* target resolves to a
             // `ShakespeareReader_ShakespeareReader.bundle` sitting beside the binary
             // in `.build/release/`. That is correct under `swift run`; moving the
             // binary alone leaves the resources behind, and CorpusLoader reports
             // that rather than silently showing an empty library.
-            resources: [.copy("Resources/Plays")]
+            resources: [
+                .copy("Resources/Plays"),
+                .copy("Resources/AppIcon.png"),
+            ]
         )
     ]
 )
