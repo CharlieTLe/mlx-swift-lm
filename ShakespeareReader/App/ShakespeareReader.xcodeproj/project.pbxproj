@@ -25,13 +25,13 @@
 		1A000000000000000000000B /* Plays */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Plays; path = ../Sources/ShakespeareReader/Resources/Plays; sourceTree = "<group>"; };
 		1A000000000000000000000D /* Info-iOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-iOS.plist"; sourceTree = "<group>"; };
 		1A000000000000000000000E /* ShakespeareReader-iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ShakespeareReader-iOS.entitlements"; sourceTree = "<group>"; };
-		1A0000000000000000000100 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
-		1A0000000000000000000101 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
-		1A0000000000000000000102 /* ShakespeareReader-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ShakespeareReader-macOS.entitlements"; sourceTree = "<group>"; };
 		1A0000000000000000000034 /* Benchmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = Benchmark.swift; path = ../Sources/ShakespeareReader/Benchmark.swift; sourceTree = "<group>"; };
 		1A0000000000000000000035 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ContentView.swift; path = ../Sources/ShakespeareReader/ContentView.swift; sourceTree = "<group>"; };
 		1A0000000000000000000036 /* SelfTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SelfTest.swift; path = ../Sources/ShakespeareReader/SelfTest.swift; sourceTree = "<group>"; };
 		1A0000000000000000000037 /* ShakespeareReaderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShakespeareReaderApp.swift; path = ../Sources/ShakespeareReader/ShakespeareReaderApp.swift; sourceTree = "<group>"; };
+		1A0000000000000000000100 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		1A0000000000000000000101 /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Info-macOS.plist"; sourceTree = "<group>"; };
+		1A0000000000000000000102 /* ShakespeareReader-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "ShakespeareReader-macOS.entitlements"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
