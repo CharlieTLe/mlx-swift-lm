@@ -1890,7 +1890,10 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
                                 switch event {
                                 case .reasoning(let text): segments.append(.reasoning(text))
                                 case .response(let text): segments.append(.response(text))
-                                case .toolCall: break
+                                // This is the no-tools path, which already discards an
+                                // accepted tool call; a rejected one is no more
+                                // actionable here.
+                                case .toolCall, .rejectedToolCall: break
                                 case .protocolError(let message):
                                     Self.protocolLogger.error("\(message)")
                                 case .stop: shouldContinue = false
@@ -1943,7 +1946,7 @@ public struct MLXLanguageModel: FoundationModels.LanguageModel, Sendable {
                     switch event {
                     case .reasoning(let text): segments.append(.reasoning(text))
                     case .response(let text): segments.append(.response(text))
-                    case .toolCall, .stop: break
+                    case .toolCall, .rejectedToolCall, .stop: break
                     case .protocolError(let message):
                         Self.protocolLogger.error("\(message)")
                     }
