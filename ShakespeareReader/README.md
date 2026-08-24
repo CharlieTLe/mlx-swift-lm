@@ -162,7 +162,10 @@ until it lands.
 
 The phone layout is the desktop one folded up: the scene list and the reader are the two
 columns of a `NavigationSplitView`, which an iPhone always renders collapsed, so the
-navigator is a push and the system back button is ⌘1. The find field sits at the top of
+navigator is a push and the system back button is ⌘1. `columnVisibility:` is ignored once
+the split view collapses, so `preferredCompactColumn:` is what pushes and is what SwiftUI
+writes `.sidebar` back into on the pop, and a tap on the scene already open has to be an
+explicit reveal rather than the no-op it is on the Mac. The find field sits at the top of
 that `Plays` column, the same one the Mac has. The commentary is an `.inspector`,
 which at this size class presents as a **sheet**, pinned to `.medium` so the verse stays
 on screen above the gloss, which is the part of the three-pane layout worth keeping, and

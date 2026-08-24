@@ -189,13 +189,18 @@ struct ContentView: View {
     /// iPhone always renders collapsed, so it is a push from the scene list to the
     /// reader, with the system's own back button standing in for ⌘1.
     ///
+    /// `navigatorColumn` is what moves it, in both directions. Opening a *different*
+    /// scene would push anyway, as SwiftUI's own coordination with the sidebar `List`'s
+    /// selection changing — but a tap on the scene already open is by definition not a
+    /// change, so without that binding it went nowhere at all.
+    ///
     /// The commentary is an `.inspector` specifically because that container
     /// auto-presents as a **sheet** at this size class: the verse stays on screen
     /// above the gloss, which is the whole point of the three-pane desktop layout
     /// and the one part of it worth keeping on a phone.
     @ViewBuilder
     private var phonePanes: some View {
-        NavigationSplitView(columnVisibility: navigatorVisibility) {
+        NavigationSplitView(preferredCompactColumn: navigatorColumn) {
             Group {
                 if let corpus, let sceneKey {
                     navigatorPane(corpus: corpus, key: sceneKey)
@@ -244,14 +249,35 @@ struct ContentView: View {
         }
     }
 
-    /// The persisted navigator preference, in the shape `NavigationSplitView` wants.
-    /// Reused rather than duplicated: collapsed, the split view writes `.detailOnly`
-    /// on a push and `.all` on a pop, so "was I reading or browsing" survives a
-    /// relaunch off the same key the Mac uses.
-    private var navigatorVisibility: Binding<NavigationSplitViewVisibility> {
+    /// The persisted navigator preference, in the shape a *collapsed* split view acts on.
+    ///
+    /// `columnVisibility:` is ignored once the split view collapses, and this target is
+    /// iPhone-only, so it is always collapsed: the binding this replaces never ran in
+    /// either direction — not written on a push, not read on a pop — which is why its
+    /// comment claimed a `.detailOnly`/`.all` round trip the app never performed, and why
+    /// the stored flag was still `true` after whole reading sessions.
+    /// `preferredCompactColumn:` is the two-way one: writing `.detail` pushes the reader,
+    /// and SwiftUI writes `.sidebar` back when the reader taps the system back button, so
+    /// within a session the stored flag finally tracks which pane is up. It does *not* make
+    /// browsing survive a relaunch, which is measured, not assumed: the flag comes back
+    /// `true` and the reader is on screen anyway, because `loadCorpus()` runs from `.task`
+    /// and so writes the restored `sceneKey` into a sidebar `List` whose selection was
+    /// still `nil` — a selection *change*, which is the push SwiftUI performs on its own.
+    /// Landing in the reader is the right place to land, so nothing here fights it; the
+    /// same key as the Mac is kept because it is the one preference this expresses.
+    ///
+    /// Not `init(columnVisibility:preferredCompactColumn:)`, which passes both: that is
+    /// the right shape the day this target gains iPad, where a regular width honours
+    /// visibility and ignores the compact column. Today it would be a second binding over
+    /// one stored flag, with only the inert half added.
+    ///
+    /// `corpusError` forces the sidebar because the failure is rendered into that column:
+    /// restoring straight into the detail would leave it behind a back button nobody has a
+    /// reason to press.
+    private var navigatorColumn: Binding<NavigationSplitViewColumn> {
         Binding(
-            get: { showsNavigator ? .all : .detailOnly },
-            set: { showsNavigator = $0 != .detailOnly })
+            get: { showsNavigator || corpusError != nil ? .sidebar : .detail },
+            set: { showsNavigator = $0 == .sidebar })
     }
     #endif
 
@@ -783,7 +809,26 @@ struct ContentView: View {
         casts[play.id] ?? Cast(play: play)
     }
 
+    /// Brings the reader on screen, on the platform where it is not already.
+    ///
+    /// `#if`-free at the call site and conditional here, because on a Mac all three panes
+    /// are already up and hiding the navigator on every click would be the opposite of
+    /// what a click asks for — a click there stays inert.
+    private func revealReader() {
+        #if !os(macOS)
+        showsNavigator = false
+        #endif
+    }
+
     private func openScene(_ key: SceneKey, in corpus: Corpus) {
+        // Above the guard: a tap on the scene already open is a request to *see* it, and
+        // on a phone that is a push. `List(selection:)` does call its setter for a tap on
+        // the row it has already selected (measured), so this is the tap arriving — it
+        // just used to mutate nothing at all.
+        revealReader()
+        // Everything below is a scene *change*. A re-tap must not reach `selection = nil`
+        // / `clearAnnotation()`: the same "a re-tap is not a new request" rule a re-tapped
+        // glossed line follows, which also makes a duplicate call harmless.
         guard key != sceneKey else { return }
         sceneKey = key
         selection = nil
