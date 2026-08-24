@@ -709,6 +709,36 @@ enum SelfTest {
 
         log.equal(context.citation, "Hamlet · I.v.96 (this edition)", "the citation")
         log.equal(context.digest.count, 64, "the digest length")
+
+        // MARK: Passage identity
+
+        // What `ContentView.commit` tests before it decides a tap is a re-tap of the
+        // passage already in the pane rather than a new request.
+        func built(_ selection: LineSelection, synopsis: String? = nil) -> PassageContext? {
+            PassageContext.build(
+                play: play, key: key, scene: scene, selection: selection,
+                cast: Cast(play: play), synopsis: synopsis,
+                synopsisIsPartial: synopsis != nil)
+        }
+
+        guard let again = built(LineSelection(at: start)),
+            let neighbour = built(LineSelection(at: start + 1)),
+            let speech = built(LineSelection.speech(at: start, in: scene)),
+            let summarized = built(LineSelection(at: start), synopsis: "The Ghost departs.")
+        else {
+            log.fail("a passage-identity context did not build")
+            return
+        }
+
+        log.check(context.isSamePassage(as: again), "the same line rebuilt")
+        log.check(!context.isSamePassage(as: neighbour), "the next line along")
+        log.check(
+            !context.isSamePassage(as: speech),
+            "the whole speech, starting on the same line")
+        // The case the comment on `isSamePassage` is defending: the synopsis arrives in
+        // the background, and a `==` here would call the passage new when it did.
+        log.check(context.isSamePassage(as: summarized), "the same line, now with a synopsis")
+        log.check(context != summarized, "a synopsis is still a difference under ==")
     }
 
     /// Regenerated deliberately, alongside a `Prompts.version` bump.

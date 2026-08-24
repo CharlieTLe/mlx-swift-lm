@@ -107,6 +107,17 @@ struct PassageContext: Sendable, Hashable {
             digest: digest(of: selected))
     }
 
+    /// True when `other` names the same lines of the same scene.
+    ///
+    /// Not `==`: a context also carries the scene synopsis, which grows from partial to
+    /// whole in the background, and the disk cache is keyed on `key` + `digest` alone
+    /// (`AnnotationCache.passage(for:digest:)`). Comparing the whole value would call a
+    /// passage "new" the moment the synopsis landed and buy nothing but a re-read of the
+    /// same JSON.
+    func isSamePassage(as other: PassageContext) -> Bool {
+        key == other.key && digest == other.digest
+    }
+
     /// Start of the preceding window, pulled back to a speech boundary when one
     /// falls inside it. Beginning mid-speech reads as a fragment and costs the same
     /// tokens as beginning at the cue.

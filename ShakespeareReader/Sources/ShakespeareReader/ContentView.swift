@@ -892,6 +892,27 @@ struct ContentView: View {
             print(Prompts.annotationRequest(built))
         }
 
+        // A tap on the passage already in the pane is not a new request. Rebuilding it would
+        // blank the body, cancel a live generation, re-read the same JSON off disk and throw
+        // away the session the follow-ups run on — a flicker that ends where it started.
+        // Two deliberate exceptions: ⌘R (`ignoringCache`) is how a finished gloss is asked for
+        // again, and a passage with nothing on screen — one that failed, or was stopped before
+        // its first token — is worth another attempt.
+        if !ignoringCache, let current = context, current.isSamePassage(as: built),
+            isBusy || !commentary.isEmpty
+        {
+            if revealingCommentary { showsCommentary = true }
+            // A queued word question would otherwise wait for a stream that is not going to
+            // start, and then be answered about whichever passage is glossed next. Mid
+            // generation it is left alone: `start`'s task end fires it against this same
+            // passage, which is where it belongs.
+            if !isBusy, let question = pendingWordQuestion {
+                pendingWordQuestion = nil
+                ask(question)
+            }
+            return
+        }
+
         // Only now: there is a passage to put in the pane.
         if revealingCommentary { showsCommentary = true }
         clearAnnotation()
