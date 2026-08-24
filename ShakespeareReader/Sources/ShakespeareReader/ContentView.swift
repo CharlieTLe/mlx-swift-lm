@@ -15,6 +15,25 @@ struct ContentView: View {
     @State private var selection: LineSelection?
     @State private var context: PassageContext?
 
+    /// Whether the phone's gloss sheet is up. Deliberately *not* `context != nil`, which
+    /// is the bug this replaces: presentation is a moment, a gloss is not. UIKit reports
+    /// an interactive dismissal for a drag of a few points — even one that snaps back to
+    /// `.medium` — and with the sheet bound to the annotation, that nudge threw away the
+    /// commentary, the transcript, the follow-ups and the `ChatSession` they run on.
+    ///
+    /// The invariant is one-way and `clearAnnotation()` holds it: no gloss, no sheet. The
+    /// converse is the point — a gloss with no sheet over it is one the reader swiped away
+    /// and can have back by tapping the passage again, with no model work.
+    ///
+    /// Not `#if !os(macOS)`-gated even though only the phone presents anything: both
+    /// writes sit in shared code (`commit`, `clearAnnotation`), so gating the property
+    /// means gating them too. One inert `Bool` on a Mac — where `desktopPanes` gates the
+    /// third pane on `showsCommentary` and never reads this — is cheaper than `#if`s
+    /// through the middle of the annotation state machine. Not `@AppStorage` unlike
+    /// `showsCommentary`, either: which passage is glossed does not survive a launch, so
+    /// all a persisted flag could restore is an empty sheet over the verse.
+    @State private var showsGloss = false
+
     /// Which side panes are on screen. Hiding them is how the reader gets the play on
     /// its own, so how they left them is how they come back. Persisted the same way
     /// `readerFont` is, below. The commentary comes back on the next pointer selection,
@@ -227,23 +246,29 @@ struct ContentView: View {
                 }
             }
         }
-        // Presented by *having a gloss*, not by the `showsCommentary` preference.
+        // Presented by *having raised it*, not by the `showsCommentary` preference.
         //
         // On a Mac that preference is a layout question (is the third pane on screen)
         // and the reader answers it once. On a phone the pane is a sheet over the verse,
         // so "is it up" is not a preference at all but a moment: it rises when a passage
-        // is glossed and it is done when the reader swipes it away. Binding it to the
+        // is glossed and it goes down when the reader swipes it away. Binding it to the
         // stored preference instead put the placeholder sheet over the play on first
         // launch, before anything had been selected.
         //
-        // Dismissing calls `cancel()`, which is Esc's behaviour minus clearing the
-        // selection, so a gloss nobody will read stops generating. It deliberately does
-        // *not* write `showsCommentary`: that flag still gates `commit(_:)` and the
-        // scene-summary prewarm, and turning it off here would quietly stop both for
-        // the rest of the session.
+        // Dismissing calls `hideGloss()`, which lowers the sheet and keeps a finished
+        // gloss whole. This used to be `context != nil` bound to `cancel()`, and the two
+        // conflated states cost the annotation itself: UIKit calls this setter with
+        // `false` for a drag of a few points, so nudging the sheet down to glance at the
+        // verse cleared the commentary, the transcript, the follow-ups and the session,
+        // and left the verse line highlighted over the "Select lines to annotate"
+        // placeholder.
+        //
+        // It deliberately does *not* write `showsCommentary`: that flag still gates
+        // `commit(_:)` and the scene-summary prewarm, and turning it off here would
+        // quietly stop both for the rest of the session.
         .inspector(
             isPresented: Binding(
-                get: { context != nil }, set: { if !$0 { cancel() } })
+                get: { showsGloss }, set: { if !$0 { hideGloss() } })
         ) {
             commentaryPane()
         }
@@ -903,6 +928,11 @@ struct ContentView: View {
 
     private func clearAnnotation() {
         context = nil
+        // The one-way half of `showsGloss`'s invariant: no gloss, no sheet. It belongs
+        // here rather than in `cancel()` because `openScene(_:in:)` clears without
+        // cancelling, and a sheet left up across a scene change would show a citation
+        // from the scene just left. It is also why `commit`'s raise comes *after* this.
+        showsGloss = false
         commentary = ""
         followUps = []
         transcript = []
@@ -947,6 +977,10 @@ struct ContentView: View {
             isBusy || !commentary.isEmpty
         {
             if revealingCommentary { showsCommentary = true }
+            // Load-bearing, not defensive: a swipe-away now leaves a finished gloss in
+            // place, so a re-tap of that passage lands *here*, and without this the tap
+            // would do nothing and the reader would have no way back to it.
+            showsGloss = true
             // A queued word question would otherwise wait for a stream that is not going to
             // start, and then be answered about whichever passage is glossed next. Mid
             // generation it is left alone: `start`'s task end fires it against this same
@@ -962,6 +996,15 @@ struct ContentView: View {
         if revealingCommentary { showsCommentary = true }
         clearAnnotation()
         context = built
+        // After the clear, which lowers it, and in the same update as `context` so there
+        // is no dismiss-then-present flicker. Unconditional rather than gated on
+        // `revealingCommentary`, which `regenerate()` passes `false` on purpose so that
+        // ⌘R stays inert on a Mac with the third pane hidden: Regenerate is reachable on
+        // a phone from the overflow row and from the ⌘R button `SceneReaderView` keeps
+        // for a hardware keyboard, and gated on that flag it would generate into a sheet
+        // that never came back. On a phone every commit is `.pointer` origin and
+        // `showsCommentary` is always true, so raising unconditionally surprises nothing.
+        showsGloss = true
         start(built, ignoringCache: ignoringCache)
     }
 
@@ -1104,6 +1147,23 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    /// The phone's swipe-away. A drag down is a request to see the verse, not to throw the
+    /// annotation out, so with nothing running nothing is cleared: the gloss, its
+    /// transcript and its session stay, and tapping the still-highlighted passage raises
+    /// the sheet again for free.
+    ///
+    /// Mid generation it deliberately *is* Esc, for the reason `setCommentary(_:)` already
+    /// gives — a gloss nobody can read is model work spent on nothing — plus one this
+    /// path adds: `stopActiveWork()` discards the session, and `answer(_:)` finishes
+    /// silently with no `passage`, so a half-streamed passage kept on screen would let
+    /// `ask(_:)` append a question whose answer never arrives.
+    ///
+    /// Idempotent, since SwiftUI may write `false` more than once around a dismissal.
+    private func hideGloss() {
+        showsGloss = false
+        if isBusy { cancel() }
     }
 
     private func cancel() {

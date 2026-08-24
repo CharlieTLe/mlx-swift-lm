@@ -185,8 +185,12 @@ already in flight. Only hardware and a Simulator *click-drag* show this: a track
 on the Simulator is a wheel event and never contends for the touch, which is why this
 survived a Simulator pass. ⌘R, ⌘C and Esc become Regenerate, Copy passage and
 Clear selection in the reader's `⋯` menu. There is no ⌘2 and no commentary toggle: the
-sheet rises when a passage is selected and is gone when it is swiped away, so there is no
-"is the pane showing" preference for a phone to keep.
+sheet rises when a passage is selected, so there is no "is the pane showing" preference for
+a phone to keep. Swiping the sheet away only lowers it — the gloss, its transcript and its
+live `ChatSession` stay, so a re-tap of the still-highlighted passage brings the whole thing
+back with no model work. A swipe is not Esc; Clear selection is. The one thing it does stop
+is generation still in flight, because cancelling that discards the session the follow-ups
+would run on.
 
 Three divergences worth knowing about before they look like bugs:
 
