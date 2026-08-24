@@ -190,7 +190,9 @@ a phone to keep. Swiping the sheet away only lowers it — the gloss, its transc
 live `ChatSession` stay, so a re-tap of the still-highlighted passage brings the whole thing
 back with no model work. A swipe is not Esc; Clear selection is. The one thing it does stop
 is generation still in flight, because cancelling that discards the session the follow-ups
-would run on.
+would run on. The back button lowers it on exactly those terms, which it has to: the sheet
+is attached to the split view rather than to the reader column, so a pop that left it up
+would strand it over the scene list, citing a passage from the scene just left.
 
 Three divergences worth knowing about before they look like bugs:
 

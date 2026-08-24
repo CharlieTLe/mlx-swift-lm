@@ -302,7 +302,17 @@ struct ContentView: View {
     private var navigatorColumn: Binding<NavigationSplitViewColumn> {
         Binding(
             get: { showsNavigator || corpusError != nil ? .sidebar : .detail },
-            set: { showsNavigator = $0 == .sidebar })
+            set: {
+                showsNavigator = $0 == .sidebar
+                // The pop is the phone's ⌘1, and on a Mac ⌘1 leaves the commentary alone
+                // because the two panes are side by side. Here the sheet is over the *split
+                // view*, not over the reader column, so it outlives the column it belongs to
+                // and ends up citing lines from a scene that is no longer on screen.
+                // `hideGloss()` rather than `cancel()` for the same reason the swipe-away
+                // calls it: leaving the reader is not throwing the gloss out, and a re-tap
+                // of the still-highlighted passage brings it back with no model work.
+                if $0 == .sidebar { hideGloss() }
+            })
     }
     #endif
 
