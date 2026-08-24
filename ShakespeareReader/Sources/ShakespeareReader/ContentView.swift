@@ -58,6 +58,20 @@ struct ContentView: View {
     /// Which families are installed, and the on-demand download for Garamond.
     @State private var fonts = ReaderFontLibrary()
 
+    /// The view the system dictionary panel is popped over, installed in the reader pane's
+    /// background by `readerPane(corpus:play:key:scene:)`.
+    @State private var dictionaryAnchor = DictionaryAnchor()
+
+    /// A word question waiting for a passage.
+    ///
+    /// `ask(_:)` needs a `context` and an idle model, so a word right-clicked in a line
+    /// that is not currently glossed cannot be asked about straight away: the passage has
+    /// to be selected and glossed first. One optional and a single deterministic firing
+    /// point — the end of `start(_:ignoringCache:)`'s `Task`, where `prefill` is already
+    /// cleared — rather than watching `isBusy` change, which would fire on whichever
+    /// transition happened to come first.
+    @State private var pendingWordQuestion: String?
+
     @State private var commentary = ""
     @State private var followUps: [String] = []
     @State private var transcript: [AnnotationPaneView.Exchange] = []
@@ -266,13 +280,24 @@ struct ContentView: View {
             },
             onCancel: { cancel() },
             onRegenerate: { regenerate() },
-            onStepScene: { step in stepScene(step, in: corpus) }
+            onStepScene: { step in stepScene(step, in: corpus) },
+            onLookUpWord: { term, point in lookUpInDictionary(term, at: point) },
+            onExplainWord: { term, line in explainWord(term, atLine: line) }
         )
         .environment(
             \.readerTypeface,
             fonts.typeface(
                 for: readerFont, textSize: readerTextSize,
-                dynamicTypeSize: dynamicTypeSize))
+                dynamicTypeSize: dynamicTypeSize)
+        )
+        // The dictionary panel needs an `NSView` to be popped over and a point to be
+        // popped at, and this is both: the anchor fills the reader pane, so the space
+        // registered here *is* the anchor's own coordinate system, and a word's baseline
+        // origin resolved in a `LineRow` can be spent against it unconverted. It draws
+        // nothing and takes no clicks — see `DictionaryAnchorView.AnchorView`, where that
+        // second part is load-bearing.
+        .coordinateSpace(name: DictionaryAnchor.space)
+        .background { DictionaryAnchorView(anchor: dictionaryAnchor) }
     }
 
     @ViewBuilder
@@ -928,7 +953,60 @@ struct ContentView: View {
                 }
             }
             prefill = nil
+            // The one place a queued word question is fired. By here the service's stream
+            // has closed, which means its final `.phase(.idle)` has already landed, so
+            // `ask(_:)`'s `!isBusy` guard passes. Cleared first, so a second commit cannot
+            // ask the same question twice; if the passage was abandoned instead of glossed,
+            // `ask(_:)` finds no `context` and drops it, which is the behaviour wanted.
+            if let question = pendingWordQuestion {
+                pendingWordQuestion = nil
+                ask(question)
+            }
         }
+    }
+
+    // MARK: - Word lookup
+
+    /// The system dictionary, over the word itself.
+    ///
+    /// A real `DCSCopyTextDefinition` panel rather than a `dict://` URL, which works but
+    /// switches apps: looking a word up in the middle of a speech should not take the
+    /// reader out of the play.
+    private func lookUpInDictionary(_ term: String, at point: CGPoint) {
+        dictionaryAnchor.showDefinition(term, at: point)
+    }
+
+    /// A word, glossed in context by the model.
+    ///
+    /// This rides the existing turn-2 path — `ask(_:)` into the passage's own `ChatSession`,
+    /// which is why a follow-up costs about 0.2 s — and adds no generation machinery of its
+    /// own. Turn 1 is untouched, which is what keeps `Prompts.version` and the golden
+    /// `PassageContext` render out of it.
+    ///
+    /// The word's own line has to be *inside the glossed passage*, not merely inside the
+    /// current selection: the session the question goes into was built from the passage, so
+    /// asking about a word three speeches away would be asking about something the model
+    /// was never shown.
+    private func explainWord(_ term: String, atLine index: Int) {
+        let question = Prompts.wordQuestion(term)
+        if context != nil, selection?.contains(index) == true, !isBusy {
+            ask(question)
+            return
+        }
+
+        guard let corpus, let sceneKey, let play = corpus.play(sceneKey.playID),
+            let scene = corpus.scene(sceneKey)
+        else { return }
+
+        // Selecting the line by hand rather than through the reader's own 350 ms debounce,
+        // which only `SceneReaderView`'s gestures reach: writing `selection` from out here
+        // commits nothing on its own. Revealing the commentary, because asking about a word
+        // is a request to be told something, exactly as pointing at a passage is.
+        let selected = LineSelection(at: index)
+        pendingWordQuestion = question
+        selection = selected
+        commit(
+            selected, play: play, key: sceneKey, scene: scene, revealingCommentary: true)
     }
 
     /// Guarded here and not only by the pane's `.disabled`, because a Return keypress
@@ -964,6 +1042,10 @@ struct ContentView: View {
 
     private func cancel() {
         Task { await service.stopActiveWork() }
+        // A queued word question goes with the passage it was asked about. It would be
+        // dropped anyway — `ask(_:)` requires a `context` — but not until the next passage
+        // was glossed, and then it would be answered about that one instead.
+        pendingWordQuestion = nil
         clearAnnotation()
     }
 }

@@ -34,6 +34,17 @@ struct SceneReaderView: View {
     /// is the navigator's job.
     let onStepScene: (Int) -> Void
 
+    /// A word right-clicked in the verse, on its way to the system dictionary: the term
+    /// and the baseline origin the panel should be popped at, in `DictionaryAnchor.space`.
+    /// The anchor itself lives with the pane, in `ContentView.readerPane`, so this view
+    /// only carries the point across.
+    let onLookUpWord: (String, CGPoint) -> Void
+
+    /// A word right-clicked in the verse, on its way to the commentary pane as a question.
+    /// The line index goes with it because the word's passage may not be the glossed one,
+    /// and `ContentView` is what knows whether it has to select it first.
+    let onExplainWord: (String, Int) -> Void
+
     private static let space = "reader"
     private static let commitDelay = Duration.milliseconds(350)
 
@@ -215,7 +226,9 @@ struct SceneReaderView: View {
             display: line.speaker.map(cast.display),
             isSelected: selection?.contains(index) ?? false,
             isFirstSelected: selection?.range.lowerBound == index,
-            hasFocus: bandHasFocus
+            hasFocus: bandHasFocus,
+            onLookUpWord: onLookUpWord,
+            onExplainWord: onExplainWord
         )
         .reportRowFrame(index: index, space: Self.space)
         // The `count: 2` gesture must be attached *before* the `count: 1` gesture
@@ -241,6 +254,11 @@ struct SceneReaderView: View {
         // iOS attaches nothing here. A `DragGesture` on these rows, in any shape, stops
         // the scene from scrolling; the touch equivalent of the sweep is the
         // `SweepRecognizer` on the scroll view instead. See its own note.
+        //
+        // Nothing is attached here for word lookup either, on either platform. The hover
+        // that marks a word and the menu that acts on it are both inside `LineRow`, on the
+        // verse `Text` alone, and hover consumes neither clicks nor drags — which is the
+        // reason the four gestures above did not have to be renegotiated to get it.
     }
 
     /// Whether the selection band should draw as though the pane holds the keyboard.

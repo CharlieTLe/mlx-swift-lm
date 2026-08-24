@@ -177,7 +177,11 @@ enum ReaderFont: String, CaseIterable, Sendable {
     #if !os(macOS)
     /// `DynamicTypeSize` and `UIContentSizeCategory` are the same ladder in two types,
     /// and SwiftUI ships no conversion between them.
-    private static func contentSizeCategory(
+    ///
+    /// `fileprivate` rather than `private` for the same reason `systemSize(_:)` is:
+    /// `ReaderTypeface` is a different type in this file, and it needs this to reproduce
+    /// what `relativeTo:` does when resolving a concrete face.
+    fileprivate static func contentSizeCategory(
         _ size: DynamicTypeSize
     ) -> UIContentSizeCategory {
         switch size {
@@ -200,7 +204,7 @@ enum ReaderFont: String, CaseIterable, Sendable {
 
     /// `NSFont.TextStyle` and `UIFont.TextStyle` spell every case the same, so this
     /// mapping is written once against `PlatformFont`.
-    private static func platformStyle(_ style: Font.TextStyle) -> PlatformFont.TextStyle {
+    fileprivate static func platformStyle(_ style: Font.TextStyle) -> PlatformFont.TextStyle {
         switch style {
         case .largeTitle: .largeTitle
         case .title: .title1
@@ -366,6 +370,109 @@ struct ReaderTypeface: Equatable, Sendable {
     /// `textSize.multiplier` and not `scale`, because the gutter is not in the reader's
     /// chosen family and so has no optical correction to apply.
     var gutterWidth: CGFloat { (30 * textSize.multiplier).rounded() }
+
+    // MARK: - Roles, resolved
+
+    /// `verse` and `direction` again, as concrete faces at concrete point sizes, which is
+    /// what hit-testing a word needs: a SwiftUI `Font` cannot be asked which family or how
+    /// many points it resolved to, so `WordHitTest` has to be told.
+    ///
+    /// These two **shadow** the roles above and have to be kept in step with them — the
+    /// family, the point size, the `textSize.isDefault` short-circuit and the
+    /// `size(_:)` / `systemFaceSize(_:)` asymmetry are all restated here. A role changed
+    /// without its twin does not fail to compile; it makes the hover mark drift along the
+    /// line, further the further right the pointer is.
+    ///
+    /// The system-face branch needs no `isDefault` case of its own, and that is not an
+    /// omission: at the default step `scale` is exactly 1, so `systemFaceSize(_:)` returns
+    /// the very point size `Font.body` resolves to. The one difference is this rounds and
+    /// the text style does not, which on macOS is no difference at all — every system text
+    /// style there is a whole number of points.
+    var versePlatformFont: PlatformFont {
+        Self.face(familyName, size: scaledSize(.body), italic: false)
+    }
+
+    /// Directions, in the italic they are drawn in — italic advances are not the upright
+    /// face's, so hit-testing with the upright one would drift.
+    ///
+    /// Big Caslon is the exception and needs nothing special: `oblique(_:size:)` shears the
+    /// matrix's `c` slot only, so its advances *are* the upright face's, and `hasItalicFace`
+    /// is what keeps it out of the italic branch here exactly as it does there.
+    var directionPlatformFont: PlatformFont {
+        Self.face(
+            familyName, size: scaledSize(.callout),
+            italic: familyName == nil || hasItalicFace)
+    }
+
+    /// The rendered point size of a role, for the family this typeface resolved to.
+    ///
+    /// The two branches are the `size(_:)` / `systemFaceSize(_:)` asymmetry: a custom face
+    /// is handed to `Font.custom(_:size:relativeTo:)`, which scales it by Dynamic Type
+    /// afterwards, and the system face is handed to `Font.system(size:)`, which does not.
+    private func scaledSize(_ style: Font.TextStyle) -> CGFloat {
+        guard familyName != nil else { return systemFaceSize(style) }
+        #if os(macOS)
+        // Dynamic Type is pinned at `.large`, so `relativeTo:` scales by 1 and the size
+        // asked for is the size drawn.
+        return size(style)
+        #else
+        // What `relativeTo:` does, reproduced: the ratio of the category in force to
+        // `.large`, applied to a size measured at `.large`. This is the half of word
+        // lookup that is not wired up on iOS yet, and it is written out so that when it
+        // is, the mark lands on the word at every Dynamic Type size rather than only at
+        // the default one.
+        return UIFontMetrics(forTextStyle: ReaderFont.platformStyle(style))
+            .scaledValue(
+                for: size(style),
+                compatibleWith: UITraitCollection(
+                    preferredContentSizeCategory: ReaderFont.contentSizeCategory(
+                        dynamicTypeSize)))
+        #endif
+    }
+
+    /// A family name, a point size and an italic flag, resolved to the face CoreText
+    /// actually draws.
+    ///
+    /// CoreText and then `PlatformFont(name:size:)`, because `NSFont`/`UIFont` take a font
+    /// *name* while this app carries family names — `Baskerville` has to become
+    /// `Baskerville-Italic` and only CoreText knows that. The system face is the one
+    /// exception and is asked for by hand: its PostScript name is the private
+    /// `.SFNS-Regular`, which `NSFont(name:)` refuses, and CoreText logs a warning at
+    /// anyone who tries.
+    private static func face(
+        _ family: String?, size: CGFloat, italic: Bool
+    ) -> PlatformFont {
+        let system = PlatformFont.systemFont(ofSize: size)
+        guard let family else {
+            return italic ? (italicVariant(of: system) ?? system) : system
+        }
+
+        let base = CTFontCreateWithFontDescriptor(
+            CTFontDescriptorCreateWithAttributes(
+                [kCTFontFamilyNameAttribute: family] as CFDictionary),
+            size, nil)
+        let face =
+            italic
+            ? (CTFontCreateCopyWithSymbolicTraits(
+                base, size, nil, .traitItalic, .traitItalic) ?? base)
+            : base
+        return PlatformFont(name: CTFontCopyPostScriptName(face) as String, size: size)
+            ?? system
+    }
+
+    /// The system face's italic cut, which is the one thing in this pair that has to be
+    /// written twice: AppKit's `withSymbolicTraits` is not optional and its font
+    /// initializer is, and UIKit has them exactly the other way round.
+    private static func italicVariant(of font: PlatformFont) -> PlatformFont? {
+        #if os(macOS)
+        NSFont(
+            descriptor: font.fontDescriptor.withSymbolicTraits(.italic),
+            size: font.pointSize)
+        #else
+        font.fontDescriptor.withSymbolicTraits(.traitItalic)
+            .map { UIFont(descriptor: $0, size: font.pointSize) }
+        #endif
+    }
 
     // MARK: - Sizing
 

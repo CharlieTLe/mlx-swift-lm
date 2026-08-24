@@ -242,11 +242,19 @@ struct AnnotationPaneView: View {
 
             // The selected lines are echoed so the reader does not lose the anchor
             // while reading the gloss.
+            //
+            // `.textSelection(.enabled)` here, as on the citation above and the commentary
+            // and transcript below: this is the one place in the app where a word can be
+            // swept out with the pointer and looked up through the system's own menu,
+            // because it is the one place where no selection gesture is competing for the
+            // drag. In the verse itself a drag sweeps a passage, and hovering a word is what
+            // stands in for highlighting it.
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(Array(selectedLines.enumerated()), id: \.offset) { _, line in
                     Text(line.isDirection ? "[\(line.text)]" : line.text)
                         .font(line.isDirection ? .caption2.italic() : .caption)
                         .foregroundStyle(line.isDirection ? .tertiary : .secondary)
+                        .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }

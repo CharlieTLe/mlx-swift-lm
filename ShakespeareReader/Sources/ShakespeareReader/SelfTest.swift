@@ -43,6 +43,7 @@ enum SelfTest {
         readerTextSizes(log)
         readingProgress(log)
         navigator(log)
+        wordTokenizer(log)
 
         if log.failures.isEmpty {
             print("selftest: all checks passed")
@@ -1190,6 +1191,134 @@ enum SelfTest {
 
         // Nothing at all, which the view renders as its placeholder.
         log.equal(ids("zzz"), [], "the plays matching \"zzz\"")
+    }
+
+    // MARK: - Word lookup
+
+    /// Where one word of the verse begins and ends.
+    ///
+    /// The only pure seam of word lookup, and so the only one this file can reach:
+    /// `WordHitTest` needs a resolved face and a wrap width and answers with a point on a
+    /// line nobody drew, and whether it agrees with what SwiftUI rendered is a thing that
+    /// has to be looked at rather than asserted. That is what the hover mark is for. This
+    /// asserts the half that is arithmetic.
+    private static func wordTokenizer(_ log: Log) {
+        /// Every word of `text`, as strings.
+        func words(_ text: String) -> [String] {
+            WordTokenizer.words(in: text).map { String(text[$0]) }
+        }
+
+        /// The invariant that makes a hover mark trustworthy: the ranges tile the string.
+        /// Ordered, non-overlapping, non-empty, and everything they leave out is
+        /// punctuation or space — a gap with a letter in it is a word the reader can point
+        /// at and be told nothing about.
+        func tiles(_ text: String, _ label: String) {
+            let ranges = WordTokenizer.words(in: text)
+            var cursor = text.startIndex
+            for range in ranges {
+                log.check(
+                    !range.isEmpty, "\(label): an empty word range in \"\(text)\"")
+                log.check(
+                    range.lowerBound >= cursor,
+                    "\(label): word ranges overlap or run backwards in \"\(text)\"")
+                for character in text[cursor ..< range.lowerBound] {
+                    log.check(
+                        !character.isLetter && !character.isNumber,
+                        "\(label): \"\(character)\" in \"\(text)\" is in no word")
+                }
+                cursor = range.upperBound
+            }
+            for character in text[cursor...] {
+                log.check(
+                    !character.isLetter && !character.isNumber,
+                    "\(label): trailing \"\(character)\" in \"\(text)\" is in no word")
+            }
+
+            // And what the pointer will actually ask: every character of a word resolves
+            // back to that same word.
+            for range in ranges {
+                for index in text[range].indices {
+                    log.equal(
+                        WordTokenizer.word(at: index, in: text), range,
+                        "\(label): the word at \"\(text[index])\" in \"\(text)\"")
+                }
+            }
+        }
+
+        // The ten words of the most-read line in English, which is also the shape that
+        // matters most: the commas and the closing colon are not part of any word.
+        log.equal(
+            words("To be, or not to be, that is the question:"),
+            ["To", "be", "or", "not", "to", "be", "that", "is", "the", "question"],
+            "the words of \"To be, or not to be\"")
+
+        // Elisions stay whole, in both apostrophes: the corpus is typeset with the curly
+        // one and a reader's own typing is not. `’tis` is the one `.byWords` gets wrong on
+        // its own, handing back `tis` and leaving the apostrophe in no word at all.
+        log.equal(
+            words("The undiscover’d country"), ["The", "undiscover’d", "country"],
+            "an elided participle")
+        log.equal(words("o’er the"), ["o’er", "the"], "\"o’er\"")
+        log.equal(words("o'er the"), ["o'er", "the"], "\"o’er\" with a straight apostrophe")
+        log.equal(words("on’t"), ["on’t"], "\"on’t\"")
+        log.equal(words("’tis so"), ["’tis", "so"], "a leading elision")
+        log.equal(words("Who’s there?"), ["Who’s", "there"], "\"Who’s there?\"")
+        log.equal(words("Hamlet’s father"), ["Hamlet’s", "father"], "a possessive")
+
+        // Compounds stay whole, which `.byWords` also gets wrong on its own: it splits at
+        // every hyphen.
+        log.equal(words("well-a-day"), ["well-a-day"], "\"well-a-day\"")
+        log.equal(words("to-morrow and"), ["to-morrow", "and"], "\"to-morrow\"")
+        // And the reason a joiner merges across one character only: the transcription
+        // writes a dash as two hyphens, and a run of them would fuse two words into a
+        // portmanteau the dictionary has never heard of.
+        log.equal(words("death,--and"), ["death", "and"], "a double-hyphen dash")
+
+        // What the dictionary and the model are handed: the word, without the sentence
+        // leaning on it. The apostrophe and the hyphen *inside* a word are the word.
+        func term(_ text: String) -> String {
+            guard let range = WordTokenizer.words(in: text).first else { return "" }
+            return WordTokenizer.term(for: range, in: text)
+        }
+        log.equal(term("there?"), "there", "the term of \"there?\"")
+        log.equal(term("death,"), "death", "the term of \"death,\"")
+        log.equal(term("o’er"), "o’er", "the term of \"o’er\"")
+        log.equal(term("to-morrow"), "to-morrow", "the term of \"to-morrow\"")
+
+        // Nothing is a word on a space, and nothing is offered there.
+        let line = "To be, or not to be"
+        guard let space = line.firstIndex(of: " ") else {
+            log.fail("no space in a string with two of them")
+            return
+        }
+        log.check(
+            WordTokenizer.word(at: space, in: line) == nil,
+            "a space resolved to a word")
+        log.check(
+            WordTokenizer.word(at: line.startIndex, in: line) != nil,
+            "the first letter of a line resolved to no word")
+
+        tiles("", "an empty line")
+        tiles("[_Exeunt._]", "a direction's markup")
+        for text in ["To be, or not to be, that is the question:", "’tis well-a-day, o’er"] {
+            tiles(text, "a hand-written line")
+        }
+
+        // And against the real thing, because the invariant is about punctuation the
+        // corpus has and hand-written strings do not. One play rather than all 35: the
+        // tokenizer knows nothing about which play it is reading, and Hamlet is 4,000
+        // lines of the punctuation in question.
+        guard let corpus = try? CorpusLoader.load(), let play = corpus.play("hamlet") else {
+            log.fail("could not load Hamlet for the word-tokenizer checks")
+            return
+        }
+        for act in play.acts {
+            for scene in act.scenes {
+                for line in scene.lines {
+                    tiles(line.plainText, "\(play.id) \(act.number).\(scene.number)")
+                }
+            }
+        }
     }
 }
 

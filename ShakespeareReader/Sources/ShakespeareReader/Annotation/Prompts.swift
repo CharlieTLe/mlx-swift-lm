@@ -155,6 +155,21 @@ enum Prompts {
         and nothing else.
         """
 
+    /// A word right-clicked in the verse, as a question.
+    ///
+    /// Phrased as a reader's own question and nothing more, because that is what it is:
+    /// it goes through `ask(_:)` and `answerRequest(_:)`, which already set the length and
+    /// the voice, and it is shown verbatim in the transcript as the thing that was asked.
+    /// A separate instruction block would be a second voice in a session that already has
+    /// one.
+    ///
+    /// The one string in this file that owes **no `version` bump**. The rule above is
+    /// about strings that change cached output, and nothing is cached from this one:
+    /// `AnnotationCache` keys on turn 1, which a word question does not touch.
+    static func wordQuestion(_ term: String) -> String {
+        "What does “\(term)” mean here?"
+    }
+
     /// Turns the model's numbered list into tappable questions.
     ///
     /// Lives beside the prompt that asks for the list, because the two are one

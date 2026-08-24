@@ -288,6 +288,23 @@ A cache hit costs **1 ms** and no model work at all.
   edge instead, since a selection is scene-scoped. Clicking a line is what hands the
   keyboard back to the reader after the navigator has it — the selection band is grey
   while the arrows are pointed somewhere else.
+- **A single word is hover-and-right-click**, macOS only for now. Moving the pointer along
+  a line underlines the word under it, and right-clicking that word offers the system
+  dictionary panel over it (only when the dictionary actually has an entry — `undiscover’d`
+  and `well-a-day` are offered nothing rather than an empty panel, while `quietus`, `argal`
+  and even `’tis` have real entries), an *Explain “word” in context* that rides
+  the same follow-up turn a tapped question does, and Copy. The word is resolved by laying
+  the line out a second time with CoreText and hit-testing that, which works because the
+  verse carries no tracking and macOS pins Dynamic Type at `.large`; the underline is there
+  partly so a near-miss is visible before you commit to it. What this is *not* is
+  character-level drag-highlighting of the verse: `.textSelection(.enabled)` there would
+  put system character selection in direct competition with the per-row drag that sweeps a
+  passage, which is the app's primary interaction, so hovering a word is what stands in for
+  highlighting one. The echoed lines in the commentary pane *are* selectable, on both
+  platforms, since nothing is competing for the drag there. Right-clicking deliberately
+  does not select the line: selecting commits a generation 350 ms later, which is too heavy
+  a side effect for opening a menu, so only Explain moves the selection — and when it has
+  to, the word question waits for the passage to be glossed and then asks itself.
 - **Context is deterministic**, from the play's own structure: no embeddings, because
   the act/scene/speaker hierarchy is a better index here and it is exact.
 - **One scene at a time.** This bounds rows to under 1,000 (Love's Labour's Lost V.ii

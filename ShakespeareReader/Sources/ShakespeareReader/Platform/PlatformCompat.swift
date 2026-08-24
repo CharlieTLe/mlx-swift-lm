@@ -44,13 +44,20 @@ var isShiftKeyDown: Bool {
     #endif
 }
 
-#if !os(macOS)
-/// iOS only. macOS copies through `.onCopyCommand`, which hands the responder
-/// chain an `NSItemProvider` rather than writing the pasteboard itself.
+/// Writes the pasteboard directly.
+///
+/// macOS otherwise copies through `.onCopyCommand`, which hands the responder chain an
+/// `NSItemProvider` rather than writing the pasteboard itself — but a menu item is not a
+/// responder-chain command, so the word-lookup menu's Copy needs this on both platforms.
+/// `clearContents()` first, because `NSPasteboard` appends to whatever the last owner left.
 func copyToPasteboard(_ text: String) {
+    #if os(macOS)
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
+    #else
     UIPasteboard.general.string = text
+    #endif
 }
-#endif
 
 /// Whether MLX has a GPU to talk to.
 ///
