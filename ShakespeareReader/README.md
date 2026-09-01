@@ -139,13 +139,13 @@ both can be installed at once and are then two different Mac apps on one machine
 redirect `~/.cache/huggingface` into `~/Library/Containers/` and re-download 2.2 GB that
 is already on disk; that file's own comment records this, along with why hardened
 runtime needs no JIT exception. `FoundationModelsIntegration` is on here for the same
-reason it is on for iPhone, described under [On iPhone](#on-iphone) below.
+reason it is on for iPhone, described under [On iPhone and iPad](#on-iphone-and-ipad) below.
 
-### On iPhone
+### On iPhone and iPad
 
 Pick your team under **Signing & Capabilities**, change the bundle id
-(`com.charliele.ShakespeareReader`) to one your team owns, and Run. iPhone only, iOS 18.0
-and up; there is no iPad or visionOS layout.
+(`com.charliele.ShakespeareReader`) to one your team owns, and Run. One universal build,
+iOS 18.0 and up; there is no visionOS layout.
 
 The iPhone entitlements file, `App/ShakespeareReader-iOS.entitlements`, asks for one
 thing, `com.apple.developer.kernel.increased-memory-limit`,
@@ -156,16 +156,55 @@ set here is 3.31 GB. Note that a personal team's profile expires in about seven 
 which the app stops launching until you rebuild it. None of this applies to the Mac build,
 which asks for nothing.
 
+**The 4B default wants an 8 GB device.** `AnnotationService.tuneMemory()` caps MLX at
+`min(6 GB, physicalMemory / 2)`, so that MLX applies backpressure — waiting for buffers to
+free — rather than the app being jetsam-killed. That was a flat 6 GB until it was run on a
+6 GB iPad (an iPad Pro 11-inch 2nd generation, `iPad8,10`), where a ceiling equal to total
+RAM is one MLX can never reach: it never waits, and the kernel arrives first. The symptom is
+not an error but a disappearance, with `MTLCompiler ... XPC_ERROR_CONNECTION_INTERRUPTED` in
+the log as the shader compiler service goes down alongside the app. Half of physical pins
+8 GB and larger devices to the same 6 GB as before and gives smaller ones a budget they can
+actually stay inside; at 6 GB of RAM that budget lands near the 3.31 GB peak, so expect slow
+or a reported failure there rather than success.
+
 Same code, same corpus, same model. First launch downloads the same 2.2 GB of
 `mlx-community/Qwen3-4B-4bit`, and the header's percentage is the only thing to watch
 until it lands.
 
-The phone layout is the desktop one folded up: the scene list and the reader are the two
-columns of a `NavigationSplitView`, which an iPhone always renders collapsed, so the
+The layout forks on **`horizontalSizeClass` at runtime**, and deliberately not on
+`UIDevice.userInterfaceIdiom`. An iPad in Slide Over, in a 1/3 Split View or in a narrow
+Stage Manager window is compact and has to behave like a phone, and it crosses back and
+forth *while the app is running*, so a decision made once from the device would leave a
+three-pane layout stretched across 320 points. `ContentView.isRegularWidth` is the one
+place that is read, and it is hardcoded `true` on macOS — where
+`ShakespeareReaderApp`'s 1080 floor makes a window narrower than the three panes
+unreachable — so the panes, the toolbar and `revealReader()` read the same on both
+platforms instead of being `#if`-gated at each use.
+
+At a **regular width** an iPad gets the Mac's behaviour: the navigator is a column that
+stays put rather than something a tap pushes past, the commentary is the persistent
+trailing column the `.inspector` presents at that size class, and both have toggles —
+`NavigationSplitView`'s own sidebar button, which drives the `columnVisibility:` binding
+this file provides, and a ⌘2 `sidebar.trailing` toggle that is the Mac's own button routed
+through the same `setCommentary(_:)`, so closing the column stops live generation and
+reopening picks the pending selection back up. `revealReader()` is inert there, which is
+load-bearing rather than tidy: `openScene(_:in:)` calls it *above* its "is this a different
+scene" guard, so without the guard every tap in the scene list would collapse the sidebar.
+The determinate download bar comes back too, because the constraint on it was ever the
+bar's width and not the platform. The annotation state machine itself needs no fork at all:
+at a regular width the inspector reads the persisted `showsCommentary` exactly as the Mac's
+third pane does, and `showsGloss` becomes an inert `Bool` exactly as it already was there.
+
+At a **compact width** — every iPhone, and an iPad multitasking narrow — the layout is the
+desktop one folded up, unchanged: the scene list and the reader are the two columns of a
+`NavigationSplitView`, which that size class renders collapsed, so the
 navigator is a push and the system back button is ⌘1. `columnVisibility:` is ignored once
 the split view collapses, so `preferredCompactColumn:` is what pushes and is what SwiftUI
 writes `.sidebar` back into on the pop, and a tap on the scene already open has to be an
-explicit reveal rather than the no-op it is on the Mac. The find field sits at the top of
+explicit reveal rather than the no-op it is on the Mac. The two bindings sit over the one
+stored `showsNavigator` flag, and the compact setter guards on `!isRegularWidth` so a write
+arriving *during* a size-class transition cannot set the flag from a column preference the
+split view is no longer acting on. The find field sits at the top of
 that `Plays` column, the same one the Mac has. The commentary is an `.inspector`,
 which at this size class presents as a **sheet**, pinned to `.medium` so the verse stays
 on screen above the gloss, which is the part of the three-pane layout worth keeping, and
@@ -173,7 +212,7 @@ draggable to `.large` to read a long one. Selection is by touch: tap a line, dou
 for the whole speech, and **press and hold, then drag** to sweep a passage. That last one
 is not a flourish. A touch pan *is* a `DragGesture`, so the bare per-row drag the Mac uses
 would win the vertical gesture against the enclosing `ScrollView` and the scene would not
-scroll at all. On a phone the sweep is therefore not a SwiftUI gesture: it is a
+scroll at all. On a touch device the sweep is therefore not a SwiftUI gesture: it is a
 `UILongPressGestureRecognizer` on the scroll view itself, in `SweepRecognizer`, which
 recognizes only after the finger holds still and keeps reporting its location afterwards.
 No composition of SwiftUI gestures does both jobs — every shape of `DragGesture` on the
@@ -184,9 +223,11 @@ sweep, because a gesture that was masked when the finger landed is not handed th
 already in flight. Only hardware and a Simulator *click-drag* show this: a trackpad scroll
 on the Simulator is a wheel event and never contends for the touch, which is why this
 survived a Simulator pass. ⌘R, ⌘C and Esc become Regenerate, Copy passage and
-Clear selection in the reader's `⋯` menu. There is no ⌘2 and no commentary toggle: the
-sheet rises when a passage is selected, so there is no "is the pane showing" preference for
-a phone to keep. Swiping the sheet away only lowers it — the gloss, its transcript and its
+Clear selection in the reader's `⋯` menu. There is no ⌘2 and no commentary toggle at this
+width: the sheet rises when a passage is selected, so there is no "is the pane showing"
+preference to keep — which is exactly what stops being true when the pane becomes a
+sibling column and the toggle comes back. Swiping the sheet away only lowers it — the
+gloss, its transcript and its
 live `ChatSession` stay, so a re-tap of the still-highlighted passage brings the whole thing
 back with no model work. A swipe is not Esc; Clear selection is. The one thing it does stop
 is generation still in flight, because cancelling that discards the session the follow-ups
@@ -194,7 +235,19 @@ would run on. The back button lowers it on exactly those terms, which it has to:
 is attached to the split view rather than to the reader column, so a pop that left it up
 would strand it over the scene list, citing a passage from the scene just left.
 
-Three divergences worth knowing about before they look like bugs:
+Both widths get a **reading measure**, `ReaderTypeface.measure`: 620pt at the default size
+step, scaled by the same `scale` the type is, so it grows with the reader's size step, with
+their chosen family's optical correction, and with Dynamic Type — a measure held fixed
+while the verse grows would get narrower in ems, which is the thing it exists to avoid. It
+caps the heading and the verse content *separately*, inside the `ScrollView` and never on
+the pane: capping the pane or the scroller itself would put the scroll indicator at the
+measure's edge and leave the margins outside the scroller, so a pan beside the verse on a
+wide iPad would not scroll the scene. It applies on macOS too rather than under an `#if`,
+where at the reader pane's 640 `idealWidth` it is a no-op — 620 clears the ~590pt of text
+left after the gutter and the trailing padding — and only bites once the window is widened
+with the side panes hidden, which is the same problem for the same reason.
+
+Divergences worth knowing about before they look like bugs:
 
 - **`FoundationModelsIntegration` is on.** The Xcode project model has no way to express
   `traits: []`, so unlike the SwiftPM build described under Notes below, *both* Xcode
@@ -214,6 +267,14 @@ Three divergences worth knowing about before they look like bugs:
   the three responder-chain commands macOS uses, and asking for focus without them made
   the reader first responder with no input view, which raised the software keyboard over
   the bottom third of the play every time a navigation-bar menu opened.
+- **The pointer and keyboard interactions stay macOS-only, on iPad included.** The layout
+  is what the size class forks; interaction on an iPad is interaction on an iPhone, at
+  either width. So hover word marking, the word context menu, `DictionaryLookup`,
+  arrow-key selection, shift-click extend and the pointer `DragGesture` are all still
+  behind `#if os(macOS)`, even on an iPad with a Magic Keyboard and a trackpad attached.
+  Un-gating them is a question about which gesture wins against `SweepRecognizer`, which
+  is the part most likely to take touch scrolling down with it, so it is deliberately not
+  a layout change.
 
 On the **Simulator** everything except the model works: all 35 plays load from the bundled
 `Plays/`, the navigator pushes, tap and double-tap and press-and-hold-then-drag all select,
@@ -256,8 +317,8 @@ passages `--benchmark` walks:
 Every row prefills at 1,370-1,620 tok/s, mean 1,527. Peak memory 2.98 GB, resident
 around 2.6-3 GB.
 
-**The ~200 tok/s prefill figure in `MuseGlimmerDemo/README.md` does not transfer.**
-That was a 30B MoE through a 52-layer stack; this is a 4B dense model prefilling
+**A ~200 tok/s prefill figure from a 30B MoE VLM does not transfer.** That was 30B
+through a 52-layer stack; this is a 4B dense model prefilling
 about eight times faster. The app was designed to shed context if prefill
 disappointed — preceding 15 lines → 8, personae limited to the selection, drop the
 synopsis — and none of that was needed. At 0.5 s to first token the annotation
@@ -591,13 +652,13 @@ prints the replacement.
 
 - **`enable_thinking: false`** on every session, via
   `additionalContext: ["enable_thinking": false]`. Without it Qwen3 reasons at length
-  before the first visible token — exactly the silent window `MuseGlimmerDemo`'s
-  README documents. With it there is no visible `<think>` block.
+  before the first visible token — a silent window with nothing on screen to account for
+  it. With it there is no visible `<think>` block.
 - **Sampling** follows Qwen3's own recommendation for non-thinking mode
   (`temperature: 0.7, topP: 0.8, topK: 20`), except the scene summary, which runs at
   0.3 because it is meant to be dull and accurate.
-- **`Memory.cacheLimit` is 256 MB**, not MuseGlimmer's 2 GB — that figure is sized for
-  a 20 GB VLM churning hundred-MB image activations. 256 MB is what
+- **`Memory.cacheLimit` is 256 MB**, not the 2 GB a 30B VLM wants — that figure is sized
+  for a 20 GB model churning hundred-MB image activations. 256 MB is what
   `MLXFoundationModels` picks for a model this size.
 - **Cancellation.** A new selection cancels the previous generation, waits for it, and
   then waits again on `session.synchronize()` for the cache lock; the session is then
@@ -669,8 +730,12 @@ prints the replacement.
 - **The Xcode app target compiles the same sources directly**, from
   `App/ShakespeareReader.xcodeproj`. It is **one multiplatform target**, not one per
   platform: `SDKROOT = auto`, `SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"`,
-  and the whole platform difference carried by per-SDK `INFOPLIST_FILE` and
-  `CODE_SIGN_ENTITLEMENTS` (plus `ARCHS[sdk=macosx*]`). A second target would have
+  `TARGETED_DEVICE_FAMILY = "1,2"` for iPhone and iPad, and the whole platform difference
+  carried by per-SDK `INFOPLIST_FILE` and
+  `CODE_SIGN_ENTITLEMENTS` (plus `ARCHS[sdk=macosx*]`). `SUPPORTS_MACCATALYST`,
+  `SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD` and `SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD` are
+  all `NO`, and the first two for the same reason: the target already builds natively for
+  macOS, so either would ship a second, worse Mac app. A second target would have
   duplicated all three build phases, the four synchronized groups and the six package
   product dependencies, and needed a second scheme, to express a difference that is
   four build settings. The sources were already shared, since `#if os(macOS)` has

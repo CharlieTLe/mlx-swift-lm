@@ -8,7 +8,7 @@ import MLXVLM
 import Tokenizers
 
 /// Where a generation is, between a selection and a finished annotation. Every wait
-/// here needs a name, in the spirit of MuseGlimmer's `Phase`.
+/// here needs a name.
 enum Phase: Equatable, Sendable {
     case idle
     case cached
@@ -63,7 +63,8 @@ enum AnnotationEvent: Sendable {
 
 /// Loads Qwen3-4B once and streams annotations from it.
 ///
-/// Follows `MuseGlimmerService` closely: `@MainActor @Observable`, a `LoadState`,
+/// The shape is the conventional one for an on-device streaming service:
+/// `@MainActor @Observable`, a `LoadState`,
 /// `#hubDownloader()` / `#huggingFaceTokenizerLoader()` to load, and an
 /// `AsyncStream` whose `continuation.onTermination` cancels the work `Task`.
 ///
@@ -182,17 +183,31 @@ final class AnnotationService {
     ///
     /// 256 MB is the figure `MLXFoundationModels` picks for a ~4B model and is
     /// right for the default. It thrashes badly at 19 GB, where a single forward
-    /// pass churns far larger activations — `MuseGlimmerDemo` needed 2 GB for the
-    /// 30B VLM. Deciding after the load, from resident size, means `--model` picks
+    /// pass churns far larger activations — a 30B VLM measured here needed 2 GB.
+    /// Deciding after the load, from resident size, means `--model` picks
     /// the right pool without a table of model sizes to keep current.
     ///
-    /// The 48 GB ceiling is a Mac number and stays on the Mac. On iOS the ceiling is
-    /// applied unconditionally instead, and low: 6 GB is well over the 4B model's
-    /// ~3 GB peak but under what iOS will hand a single app even with the
-    /// increased-memory-limit entitlement, so MLX applies backpressure, waiting for
-    /// buffers to free rather than allocating, instead of the app being jetsam-killed
-    /// with no error to report. The `isLarge` branch cannot fire on a phone at 4B, so
-    /// this is not a second guess at the same question.
+    /// The 48 GB ceiling is a Mac number and stays on the Mac. On iOS a ceiling is applied
+    /// unconditionally instead, and low, so that MLX applies backpressure — waiting for
+    /// buffers to free rather than allocating — instead of the app being jetsam-killed with
+    /// no error to report. The `isLarge` branch cannot fire on a phone at 4B, so this is not
+    /// a second guess at the same question.
+    ///
+    /// **Half of physical, and not a constant.** This was a flat 6 GB, on the reasoning that
+    /// 6 GB is well over the 4B model's ~3 GB peak but under what iOS will hand one app with
+    /// the increased-memory-limit entitlement. The second half of that is false on a 6 GB
+    /// device — an iPad Pro 11-inch (2nd generation) is one — where the ceiling *is* the
+    /// machine. A limit at total RAM is a limit MLX can never reach, so it never waits, and
+    /// the kernel arrives first: measured on an iPad8,10, where loading died with
+    /// `MTLCompiler ... XPC_ERROR_CONNECTION_INTERRUPTED` — the shader compiler service
+    /// going down with the app — and `ReportMemoryException` running on the device.
+    ///
+    /// Half of physical means the same thing on every device it ships to, which a constant
+    /// cannot: comfortably under the app's jetsam budget, so backpressure engages first. The
+    /// `min` pins 8 GB and larger devices to exactly the old 6 GB, so the phone this was
+    /// tuned on is unchanged. It does *not* promise the 4B model fits: at 6 GB of RAM the
+    /// budget lands near the measured 3.31 GB peak, so the honest outcome there is slow, or
+    /// a reported failure, rather than a process that disappears.
     private static func tuneMemory() {
         let resident = Memory.snapshot().activeMemory
         let isLarge = resident > 8 * 1024 * 1024 * 1024
@@ -202,7 +217,8 @@ final class AnnotationService {
             Memory.memoryLimit = 48 * 1024 * 1024 * 1024
         }
         #else
-        Memory.memoryLimit = 6 * 1024 * 1024 * 1024
+        Memory.memoryLimit = min(
+            6 * 1024 * 1024 * 1024, Int(ProcessInfo.processInfo.physicalMemory) / 2)
         #endif
     }
 
@@ -701,7 +717,7 @@ final class AnnotationService {
     /// variable it does not reference, and the two families spell this differently:
     ///
     /// - `enable_thinking` is Qwen3's. Without it Qwen3 reasons before the first
-    ///   visible token — the silent window MuseGlimmer's README documents. The
+    ///   visible token, a silent window with nothing on screen to account for it. The
     ///   pattern is `IntegrationTestHelpers.structuredToolContinuation`.
     /// - `reasoning_strength` is Muse-Glimmer's, from its own
     ///   `chat_template.jinja`: `render_reasoning()` writes "Reasoning strength:

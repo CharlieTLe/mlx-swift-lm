@@ -923,6 +923,11 @@ enum SelfTest {
         log.equal(shipped.speechGap, 6, "the shipped speech gap")
         log.equal(shipped.directionIndent, 28, "the shipped stage-direction indent")
         log.equal(shipped.gutterWidth, 30, "the shipped gutter width")
+        // Not a rendering promise like the others around it but a layout one: 620 is
+        // picked to clear the 640-ideal reader pane's ~590pt of text, so the measure is
+        // inert on a Mac at its defaults and only bites on a wide pane. A `scale` that
+        // drifted would move it without moving anything visible on the Mac at all.
+        log.equal(shipped.measure, 620, "the shipped reading measure")
         log.equal(shipped.actSceneTracking, 0, "the shipped act-heading tracking")
         log.equal(shipped.speakerTracking, 0.6, "the shipped speaker tracking")
 
@@ -963,6 +968,13 @@ enum SelfTest {
                 low.speechGap <= high.speechGap,
                 "the speech gap falls from \(smaller) (\(low.speechGap)) to "
                     + "\(bigger) (\(high.speechGap))")
+            // The measure has to climb with the type for the same reason it is scaled at
+            // all: a measure held fixed while the verse grows is a measure that gets
+            // narrower in ems, which is the cramped column the cap exists to avoid.
+            log.check(
+                low.measure < high.measure,
+                "the reading measure does not grow from \(smaller) (\(low.measure)) to "
+                    + "\(bigger) (\(high.measure))")
         }
 
         // What makes `SceneReaderView`'s `.onChange(of: typeface)` re-anchor the scroll

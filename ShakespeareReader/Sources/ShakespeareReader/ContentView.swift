@@ -15,8 +15,8 @@ struct ContentView: View {
     @State private var selection: LineSelection?
     @State private var context: PassageContext?
 
-    /// Whether the phone's gloss sheet is up. Deliberately *not* `context != nil`, which
-    /// is the bug this replaces: presentation is a moment, a gloss is not. UIKit reports
+    /// Whether the gloss sheet is up at a compact width. Deliberately *not* `context != nil`,
+    /// which is the bug this replaces: presentation is a moment, a gloss is not. UIKit reports
     /// an interactive dismissal for a drag of a few points — even one that snaps back to
     /// `.medium` — and with the sheet bound to the annotation, that nudge threw away the
     /// commentary, the transcript, the follow-ups and the `ChatSession` they run on.
@@ -25,13 +25,14 @@ struct ContentView: View {
     /// converse is the point — a gloss with no sheet over it is one the reader swiped away
     /// and can have back by tapping the passage again, with no model work.
     ///
-    /// Not `#if !os(macOS)`-gated even though only the phone presents anything: both
+    /// Not `#if !os(macOS)`-gated even though only a compact width presents anything: both
     /// writes sit in shared code (`commit`, `clearAnnotation`), so gating the property
-    /// means gating them too. One inert `Bool` on a Mac — where `desktopPanes` gates the
-    /// third pane on `showsCommentary` and never reads this — is cheaper than `#if`s
-    /// through the middle of the annotation state machine. Not `@AppStorage` unlike
-    /// `showsCommentary`, either: which passage is glossed does not survive a launch, so
-    /// all a persisted flag could restore is an empty sheet over the verse.
+    /// means gating them too. One inert `Bool` on a Mac — and equally at a regular width
+    /// on an iPad, where `commentaryPresented` reads `showsCommentary` instead and never
+    /// reads this — is cheaper than `#if`s through the middle of the annotation state
+    /// machine. Not `@AppStorage` unlike `showsCommentary`, either: which passage is
+    /// glossed does not survive a launch, so all a persisted flag could restore is an
+    /// empty sheet over the verse.
     @State private var showsGloss = false
 
     /// Which side panes are on screen. Hiding them is how the reader gets the play on
@@ -66,6 +67,33 @@ struct ContentView: View {
     /// Type on its own — `ReaderFont.systemSize(_:at:)` does the scaling instead, and it
     /// needs the category to do it. Always `.large` on macOS.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    /// Kept under `#if` because the macOS branch never reads it: `horizontalSizeClass`
+    /// being on the macOS SDK is not something to bet the build on, and `isRegularWidth`
+    /// below answers the question there without it.
+    #if !os(macOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
+
+    /// Whether there is room for the panes side by side, which is the *only* axis the
+    /// layout forks on.
+    ///
+    /// Deliberately not `UIDevice.userInterfaceIdiom`. An iPad in Slide Over or a narrow
+    /// Stage Manager window is compact and has to behave exactly like a phone, and it
+    /// becomes compact and regular again *while the app is running* — branching on the
+    /// device would stretch the three-pane layout across 320 points and never recover.
+    ///
+    /// Always `true` on a Mac, where a window narrow enough to matter is unreachable:
+    /// `ShakespeareReaderApp` floors it at 1080, which is over the 1010 the three panes
+    /// need. Stated here rather than `#if`-gated at each use, so the panes, the toolbar
+    /// and `revealReader()` read the same on both platforms.
+    private var isRegularWidth: Bool {
+        #if os(macOS)
+        true
+        #else
+        horizontalSizeClass == .regular
+        #endif
+    }
 
     /// Off by default: the model name, the load check and the latency numbers are for
     /// working on the app, not for reading a play. Persisted the same way `readerFont`
@@ -142,8 +170,9 @@ struct ContentView: View {
 
     /// The one place the two platforms genuinely diverge. Both branches build their
     /// panes from the same three `@ViewBuilder` helpers below, so what differs here is
-    /// the *container* and nothing else: a Mac shows all three at once, a phone shows
-    /// one at a time and raises the commentary over the verse.
+    /// the *container* and nothing else: a Mac shows all three at once, and the
+    /// `NavigationSplitView` branch shows one at a time and raises the commentary over the
+    /// verse when it is compact, or all three at once when it is not.
     @ViewBuilder
     private var layout: some View {
         #if os(macOS)
@@ -204,22 +233,30 @@ struct ContentView: View {
         }
     }
     #else
-    /// Navigator and reader as the two columns of a `NavigationSplitView`, which an
-    /// iPhone always renders collapsed, so it is a push from the scene list to the
-    /// reader, with the system's own back button standing in for ⌘1.
+    /// Navigator and reader as the two columns of a `NavigationSplitView`, which a
+    /// compact width renders collapsed, so there it is a push from the scene list to the
+    /// reader with the system's own back button standing in for ⌘1, and a regular width
+    /// renders as two columns side by side the way the Mac's `HSplitView` does.
     ///
-    /// `navigatorColumn` is what moves it, in both directions. Opening a *different*
-    /// scene would push anyway, as SwiftUI's own coordination with the sidebar `List`'s
-    /// selection changing — but a tap on the scene already open is by definition not a
-    /// change, so without that binding it went nowhere at all.
+    /// Which of the two bindings below is live follows from that, and only one ever is:
+    /// `navigatorVisibility` at regular width, `navigatorColumn` once collapsed.
     ///
-    /// The commentary is an `.inspector` specifically because that container
-    /// auto-presents as a **sheet** at this size class: the verse stays on screen
-    /// above the gloss, which is the whole point of the three-pane desktop layout
-    /// and the one part of it worth keeping on a phone.
+    /// `navigatorColumn` is what moves a collapsed split view, in both directions.
+    /// Opening a *different* scene would push anyway, as SwiftUI's own coordination with
+    /// the sidebar `List`'s selection changing — but a tap on the scene already open is
+    /// by definition not a change, so without that binding it went nowhere at all.
+    ///
+    /// The commentary is an `.inspector` because that one container is both shapes: it
+    /// auto-presents as a **sheet** at a compact width, where the verse stays on screen
+    /// above the gloss — the whole point of the three-pane desktop layout and the one
+    /// part of it worth keeping on a phone — and as a trailing **column** at a regular
+    /// width, which is the desktop layout itself.
     @ViewBuilder
     private var phonePanes: some View {
-        NavigationSplitView(preferredCompactColumn: navigatorColumn) {
+        NavigationSplitView(
+            columnVisibility: navigatorVisibility,
+            preferredCompactColumn: navigatorColumn
+        ) {
             Group {
                 if let corpus, let sceneKey {
                     navigatorPane(corpus: corpus, key: sceneKey)
@@ -246,7 +283,9 @@ struct ContentView: View {
                 }
             }
         }
-        // Presented by *having raised it*, not by the `showsCommentary` preference.
+        // Presented by *having raised it* at a compact width, and by the
+        // `showsCommentary` preference at a regular one. `commentaryPresented` is where
+        // those two readings meet; the block below is the compact half of it.
         //
         // On a Mac that preference is a layout question (is the third pane on screen)
         // and the reader answers it once. On a phone the pane is a sheet over the verse,
@@ -255,29 +294,73 @@ struct ContentView: View {
         // stored preference instead put the placeholder sheet over the play on first
         // launch, before anything had been selected.
         //
-        // Dismissing calls `hideGloss()`, which lowers the sheet and keeps a finished
-        // gloss whole. This used to be `context != nil` bound to `cancel()`, and the two
-        // conflated states cost the annotation itself: UIKit calls this setter with
-        // `false` for a drag of a few points, so nudging the sheet down to glance at the
-        // verse cleared the commentary, the transcript, the follow-ups and the session,
-        // and left the verse line highlighted over the "Select lines to annotate"
-        // placeholder.
+        // At a regular width on an iPad the pane is a sibling column rather than
+        // something over the verse, so nothing is covered up and "is it up" *is* a
+        // preference again — which is why the two widths read different flags. The
+        // trailing column is the Mac's third pane by another name, so it answers to the
+        // very flag and the very function ⌘2 does there.
         //
-        // It deliberately does *not* write `showsCommentary`: that flag still gates
-        // `commit(_:)` and the scene-summary prewarm, and turning it off here would
-        // quietly stop both for the rest of the session.
-        .inspector(
-            isPresented: Binding(
-                get: { showsGloss }, set: { if !$0 { hideGloss() } })
-        ) {
+        // Dismissing at a compact width calls `hideGloss()`, which lowers the sheet and
+        // keeps a finished gloss whole. This used to be `context != nil` bound to
+        // `cancel()`, and the two conflated states cost the annotation itself: UIKit calls
+        // this setter with `false` for a drag of a few points, so nudging the sheet down to
+        // glance at the verse cleared the commentary, the transcript, the follow-ups and
+        // the session, and left the verse line highlighted over the "Select lines to
+        // annotate" placeholder.
+        //
+        // It deliberately does *not* write `showsCommentary` at a compact width: that flag
+        // still gates `commit(_:)` and the scene-summary prewarm, and turning it off there
+        // would quietly stop both for the rest of the session.
+        .inspector(isPresented: commentaryPresented) {
             commentaryPane()
         }
     }
 
-    /// The persisted navigator preference, in the shape a *collapsed* split view acts on.
+    /// Which flag the commentary answers to, which is the whole of the difference between
+    /// the two widths.
     ///
-    /// `columnVisibility:` is ignored once the split view collapses, and this target is
-    /// iPhone-only, so it is always collapsed: the binding this replaces never ran in
+    /// Regular width routes through `setCommentary(_:)` rather than writing
+    /// `showsCommentary` directly, and that is the point of it: that function already
+    /// stops live work when the pane goes away and picks a pending selection back up when
+    /// it returns, and it already guards on `shown != showsCommentary` so it is idempotent
+    /// under SwiftUI's repeated writes. The column's own close button then behaves exactly
+    /// as ⌘2 does on the Mac, for free.
+    ///
+    /// Compact width ignores a `true` write: the sheet is raised by `commit` and by
+    /// nothing else, so there is no path that presents it from out here.
+    private var commentaryPresented: Binding<Bool> {
+        Binding(
+            get: { isRegularWidth ? showsCommentary : showsGloss },
+            set: { shown in
+                if isRegularWidth {
+                    setCommentary(shown)
+                } else if !shown {
+                    hideGloss()
+                }
+            })
+    }
+
+    /// The persisted navigator preference, in the shape a *regular-width* split view acts
+    /// on. `navigatorColumn` below is the same flag in the shape a collapsed one acts on,
+    /// and between them the stored `Bool` finally drives both layouts — which is the
+    /// two-bindings-over-one-flag shape this file used to predict rather than have.
+    ///
+    /// `.all` and not `.doubleColumn`: in a two-column split view they mean the same
+    /// thing, and `.all` is the one that reads as "both columns". The setter tests
+    /// `!= .detailOnly` rather than `== .all` because SwiftUI writes `.automatic` back,
+    /// which at a regular width means both columns showing.
+    ///
+    /// `corpusError` forces the sidebar for the same reason it does below.
+    private var navigatorVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { showsNavigator || corpusError != nil ? .all : .detailOnly },
+            set: { showsNavigator = $0 != .detailOnly })
+    }
+
+    /// The same preference, in the shape a *collapsed* split view acts on.
+    ///
+    /// `columnVisibility:` is ignored once the split view collapses, which is every
+    /// iPhone and an iPad at a compact width: the binding this replaces never ran in
     /// either direction — not written on a push, not read on a pop — which is why its
     /// comment claimed a `.detailOnly`/`.all` round trip the app never performed, and why
     /// the stored flag was still `true` after whole reading sessions.
@@ -291,11 +374,6 @@ struct ContentView: View {
     /// Landing in the reader is the right place to land, so nothing here fights it; the
     /// same key as the Mac is kept because it is the one preference this expresses.
     ///
-    /// Not `init(columnVisibility:preferredCompactColumn:)`, which passes both: that is
-    /// the right shape the day this target gains iPad, where a regular width honours
-    /// visibility and ignores the compact column. Today it would be a second binding over
-    /// one stored flag, with only the inert half added.
-    ///
     /// `corpusError` forces the sidebar because the failure is rendered into that column:
     /// restoring straight into the detail would leave it behind a back button nobody has a
     /// reason to press.
@@ -303,6 +381,14 @@ struct ContentView: View {
         Binding(
             get: { showsNavigator || corpusError != nil ? .sidebar : .detail },
             set: {
+                // The guard is what keeps two bindings over one flag from fighting. At a
+                // regular width the pop this setter exists for does not happen, and a
+                // write arriving *during* a size-class transition would set
+                // `showsNavigator` from a column preference the split view is no longer
+                // acting on — collapsing the sidebar the reader can see. `hideGloss()`
+                // would merely be inert there, since the inspector reads
+                // `showsCommentary` at a regular width; `showsNavigator` would not be.
+                guard !isRegularWidth else { return }
                 showsNavigator = $0 == .sidebar
                 // The pop is the phone's ⌘1, and on a Mac ⌘1 leaves the commentary alone
                 // because the two panes are side by side. Here the sheet is over the *split
@@ -383,12 +469,18 @@ struct ContentView: View {
         // Half height by default, which is the entire reason the commentary is an
         // `.inspector` rather than a plain `.sheet`: at `.medium` the verse is still on
         // screen above the gloss, which is what the third pane does on a Mac. Without
-        // these the inspector presents at full height on a phone and the passage being
-        // annotated disappears behind its own annotation.
+        // these the inspector presents at full height at a compact width and the passage
+        // being annotated disappears behind its own annotation.
         //
         // `presentationBackgroundInteraction` is the other half: at `.medium` the reader
         // can tap the next line without dismissing the sheet first, so moving through a
         // scene stays one tap per passage the way it is on a Mac.
+        //
+        // Both are presentation modifiers, so they are consulted only when the inspector
+        // presents *as* a sheet. At a regular width it is a trailing column and they say
+        // nothing, which is why they are not gated on the size class — and gating
+        // `.presentationDetents` would take a second `@ViewBuilder` branch, since it
+        // cannot be wrapped in an `if`.
         #if !os(macOS)
         .presentationDetents([.medium, .large])
         .presentationBackgroundInteraction(.enabled(upThrough: .medium))
@@ -437,20 +529,36 @@ struct ContentView: View {
     #else
     /// The header's controls, in a navigation bar instead.
     ///
-    /// The header's controls, in a navigation bar instead.
+    /// The commentary toggle is here at a regular width and gone at a compact one, and
+    /// both halves of that are the same reasoning read at two sizes. At a compact width
+    /// there is nothing for ⌘2 to toggle: the gloss sheet rises when a passage is selected
+    /// and closes when it is swiped away, so a button claiming to show or hide it would be
+    /// lying about a preference the phone does not keep. At a regular width the pane is a
+    /// sibling column, `showsCommentary` is exactly the preference it was on the Mac, and
+    /// the toggle is the Mac's own — same glyph, same shortcut, same function.
     ///
-    /// Both `paneToggle`s are gone. The split view's own back button is ⌘1, and there is
-    /// nothing for ⌘2 to toggle: the gloss sheet rises when a passage is selected and
-    /// closes when it is swiped away, so a button that claimed to show or hide it would
-    /// be lying about a preference the phone does not keep. Regenerate, Copy and Clear
-    /// move into the overflow menu because ⌘R, ⌘C and Esc are not keys a phone has, and
-    /// they are the reason this file, not `SceneReaderView`, owns that menu: the
-    /// selection they act on lives here.
+    /// There is no leading toggle of our own at either width. `NavigationSplitView`
+    /// inserts its own sidebar button at a regular width once `columnVisibility` is bound,
+    /// and it drives the very binding this file provides; a second control over one flag
+    /// is two things to keep in step. At a compact width the split view's back button is
+    /// ⌘1 and there is nothing to add.
+    ///
+    /// Regenerate, Copy and Clear move into the overflow menu because ⌘R, ⌘C and Esc are
+    /// not keys a touch device has, and they are the reason this file, not
+    /// `SceneReaderView`, owns that menu: the selection they act on lives here.
     @ToolbarContentBuilder
     private var readerToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
             loadStateIndicator
             typefaceMenu
+            if isRegularWidth {
+                paneToggle(
+                    "the commentary", systemImage: "sidebar.trailing", shortcut: "2",
+                    isVisible: showsCommentary
+                ) {
+                    setCommentary(!showsCommentary)
+                }
+            }
             overflowMenu
         }
     }
@@ -507,13 +615,15 @@ struct ContentView: View {
         case .loading(let progress):
             HStack(spacing: 6) {
                 if let progress, progress.totalUnitCount > 0 {
-                    // The determinate bar is macOS only. A navigation bar already
-                    // holds three controls at this point and has no 120 points to
-                    // spare; the percentage alone carries the same information.
-                    #if os(macOS)
-                    ProgressView(value: progress.fractionCompleted)
-                        .frame(width: 120)
-                    #endif
+                    // The constraint is the *bar's* width, not the platform: a compact
+                    // navigation bar already holds three controls at this point and has
+                    // no 120 points to spare, where a Mac header and a regular-width
+                    // iPad bar both do. The percentage alone carries the same
+                    // information, which is why the narrow case loses nothing.
+                    if isRegularWidth {
+                        ProgressView(value: progress.fractionCompleted)
+                            .frame(width: 120)
+                    }
                     Text("\(Int(progress.fractionCompleted * 100))%")
                         .font(.caption.monospacedDigit())
                 } else {
@@ -844,15 +954,17 @@ struct ContentView: View {
         casts[play.id] ?? Cast(play: play)
     }
 
-    /// Brings the reader on screen, on the platform where it is not already.
+    /// Brings the reader on screen, at the width where it is not already.
     ///
-    /// `#if`-free at the call site and conditional here, because on a Mac all three panes
-    /// are already up and hiding the navigator on every click would be the opposite of
-    /// what a click asks for — a click there stays inert.
+    /// `#if`-free at the call site and conditional here. At a regular width all three
+    /// panes are already up, so hiding the navigator on every click would be the opposite
+    /// of what a click asks for — a click there stays inert, on a Mac and equally on a
+    /// full-screen iPad. That guard carries more than it looks: `openScene(_:in:)` calls
+    /// this *above* its `key != sceneKey` guard, so without it every tap in the scene list
+    /// would collapse the sidebar out from under the reader.
     private func revealReader() {
-        #if !os(macOS)
+        guard !isRegularWidth else { return }
         showsNavigator = false
-        #endif
     }
 
     private func openScene(_ key: SceneKey, in corpus: Corpus) {

@@ -5,8 +5,7 @@ import PackageDescription
 // A standalone SwiftUI macOS app that annotates Shakespeare on-device.
 //
 // This is a sibling package with a *local path* dependency on the checkout, so it
-// builds against this working copy rather than a published tag. Mirrors
-// MuseGlimmerDemo/Package.swift, with MLXLLM in place of MLXVLM.
+// builds against this working copy rather than a published tag.
 //
 // Run with:  cd ShakespeareReader && swift run -c release ShakespeareReader
 let package = Package(

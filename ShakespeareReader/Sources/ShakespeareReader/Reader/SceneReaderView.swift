@@ -68,40 +68,44 @@ struct SceneReaderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            heading
+            measured(heading)
 
             ScrollViewReader { scroller in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(scene.lines.enumerated()), id: \.offset) {
-                            index, line in
-                            row(index: index, line: line)
-                        }
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.trailing, 12)
-                    #if !os(macOS)
-                    // Inside the scroll content on purpose: `SweepRecognizer` finds the
-                    // scroll view by walking up from here, and a background of the
-                    // `ScrollView` would sit outside it.
-                    .background {
-                        SweepRecognizer(
-                            onBegan: { point in
-                                guard let line = rowFrames.line(at: point) else { return }
-                                sweepAnchor = line
-                                extendDrag(from: line, to: point)
-                            },
-                            onChanged: { point in
-                                guard let sweepAnchor else { return }
-                                extendDrag(from: sweepAnchor, to: point)
-                            },
-                            onEnded: {
-                                sweepAnchor = nil
-                                if isDragging { endDrag() }
+                    measured(
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(scene.lines.enumerated()), id: \.offset) {
+                                index, line in
+                                row(index: index, line: line)
                             }
-                        )
-                    }
-                    #endif
+                        }
+                        .padding(.vertical, 10)
+                        .padding(.trailing, 12)
+                        #if !os(macOS)
+                        // Inside the scroll content on purpose: `SweepRecognizer` finds the
+                        // scroll view by walking up from here, and a background of the
+                        // `ScrollView` would sit outside it. Inside the measure too, and
+                        // harmlessly: the recognizer converts into the scroll view's own
+                        // content space, which is where `rowFrames` is measured as well.
+                        .background {
+                            SweepRecognizer(
+                                onBegan: { point in
+                                    guard let line = rowFrames.line(at: point) else { return }
+                                    sweepAnchor = line
+                                    extendDrag(from: line, to: point)
+                                },
+                                onChanged: { point in
+                                    guard let sweepAnchor else { return }
+                                    extendDrag(from: sweepAnchor, to: point)
+                                },
+                                onEnded: {
+                                    sweepAnchor = nil
+                                    if isDragging { endDrag() }
+                                }
+                            )
+                        }
+                        #endif
+                    )
                 }
                 .coordinateSpace(name: Self.space)
                 #if !os(macOS)
@@ -324,6 +328,20 @@ struct SceneReaderView: View {
     private func endDrag() {
         isDragging = false
         if let selection { scheduleCommit(selection, from: .pointer) }
+    }
+
+    /// Caps a piece of the pane at the reading measure and centres what is left over.
+    ///
+    /// Applied to the **heading and the verse content separately**, and not to the pane or
+    /// to the `ScrollView`. Capping either of those would put the scroll indicator at the
+    /// measure's edge rather than at the pane's, and — worse — leave the margins *outside*
+    /// the scroller, so a pan in the empty space beside the verse on a wide iPad would not
+    /// scroll the scene at all. Both pieces rather than the verse alone, so the heading
+    /// stays aligned with the text it introduces on a wide pane.
+    private func measured<V: View>(_ content: V) -> some View {
+        content
+            .frame(maxWidth: typeface.measure, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .center)
     }
 
     @ViewBuilder

@@ -16,10 +16,14 @@ struct RowFramesKey: PreferenceKey {
 extension [Int: CGRect] {
     /// The line under `point`, for drag selection.
     ///
-    /// Vertical containment first, because rows span the full width and a drag
+    /// Vertical containment first, because rows span the full measure and a drag
     /// that wanders sideways should still track the row it is level with. Falling
     /// back to the nearest `midY` is what makes a drag past the last row select
     /// the last row rather than stalling.
+    ///
+    /// That vertical-first rule is exactly what makes the reading measure safe: only
+    /// `point.y` is read here, so centring a narrower column of verse inside a wide pane
+    /// moves no row out from under a finger tracking it.
     ///
     /// Only visible rows are in the map, which is not a limitation in practice:
     /// you can only drag over what you can see. A long selection is click the

@@ -371,6 +371,23 @@ struct ReaderTypeface: Equatable, Sendable {
     /// chosen family and so has no optical correction to apply.
     var gutterWidth: CGFloat { (30 * textSize.multiplier).rounded() }
 
+    /// The reading measure: how wide a column of verse is allowed to get before the line
+    /// length itself becomes the thing making it hard to read. A full-screen 13" iPad in
+    /// landscape is roughly 1100pt of pane, which is about twice a comfortable measure.
+    ///
+    /// `scale` and not `textSize.multiplier`, for `directionIndent`'s reason restated: a
+    /// printed edition sets the measure in ems, so 620pt against 17pt type is not the same
+    /// measure as 620pt against 26pt type, and the optical correction for a chosen family
+    /// belongs in it too.
+    ///
+    /// 620 is chosen to be a **no-op on the Mac at its defaults**. The reader pane's
+    /// `idealWidth` is 640, which after the 30pt gutter and the 12pt trailing padding
+    /// leaves roughly 590pt of text, so the cap does not bite until the reader widens the
+    /// window with the side panes hidden — where it helps for exactly the reason it helps
+    /// on an iPad. Hence one metric applied on every platform rather than an
+    /// `#if !os(macOS)` and two code paths.
+    var measure: CGFloat { (620 * scale).rounded() }
+
     // MARK: - Roles, resolved
 
     /// `verse` and `direction` again, as concrete faces at concrete point sizes, which is
