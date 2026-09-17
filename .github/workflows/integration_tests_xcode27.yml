@@ -6,19 +6,23 @@ name: Integration Tests (xcode-27)
 # pins Xcode 26, where every `canImport(FoundationModels, _version: 2)` block
 # compiles out and the MLXFoundationModels suites simply do not exist.
 #
-# What the hosted `xcode-27` image actually is (actions/runner-images, image
-# version 20260810.0090.1, label documented as a public preview):
-#   - arm64, Xcode 27.0 beta (27A5228h) as the *default* toolchain
+# What the hosted `xcode-27` image actually is, measured on 2026-09-17 rather
+# than read off actions/runner-images metadata (image xcode-27-arm64/20260907.0173,
+# label documented as a public preview):
+#   - arm64, Xcode 27.0 beta 6 (27A5252f) as the *default* toolchain. The image
+#     lags: runner-images pins 27.0+27A266a in its toolset, and 27A266a is the
+#     released build, but the deployed image is weeks behind it.
 #   - macOS 27.0 SDK installed
-#   - host OS is macOS 26.5.2, NOT macOS 27
+#   - host OS is macOS 27.0 (26A5406e), so this is a macOS 27 host, not 26
+#   - MetalToolchain is NOT preinstalled; -downloadComponent fetches it in ~17s
+#   - only ~37Gi free on /, which is not enough for the full suite (see the
+#     "Free disk space" step)
 #
-# That combination exercises a tier the nightly never builds: the FM suites
-# COMPILE (the 27 SDK makes `canImport(..., _version: 2)` true) and then execute
-# at `DeviceTier.partial`, because the FM public surface is
-# `@available(macOS 27, *)` and this host is 26. See
+# So the FM suites both compile here (the 27 SDK makes
+# `canImport(..., _version: 2)` true) and execute at `DeviceTier.full`, because
+# the host satisfies the `@available(macOS 27, *)` FM surface. See
 # IntegrationTestingTests/MLXFoundationModelsIntegration/PlatformAvailability/DeviceTier.swift.
-# So read a green run as "compiles against the 27 SDK and degrades correctly on
-# an OS 26 host", NOT as "the FoundationModels adapter works end to end".
+# A green run here does mean "the FoundationModels adapter works end to end".
 on:
   # `workflow_dispatch` on its own is not enough while iterating: GitHub only
   # offers a dispatchable workflow if the file exists on the default branch.
@@ -105,6 +109,40 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Free disk space
+        shell: bash
+        run: |
+          # Restored after run 35178760598, which filled the disk 22 minutes into
+          # the full suite: 37Gi free at checkout, 4.7Gi at the end, a 28G Hugging
+          # Face cache, and models still left to download. An earlier revision of
+          # this workflow deleted this step because the image reported 225Gi
+          # available. That image is gone; this one is a quarter the size.
+          #
+          # Measure before reclaiming, so a run that still runs out says how much
+          # short it was rather than just failing again.
+          echo "=== before ==="
+          df -h /
+          sudo du -sh /Library/Developer/CoreSimulator/Profiles/Runtimes 2>/dev/null || true
+          du -sh /Applications/Xcode*.app 2>/dev/null || true
+          # Nothing here builds for a simulator: the only destination this
+          # workflow uses is platform=macOS. Best effort throughout, a cleanup
+          # that cannot run must not fail the experiment.
+          sudo xcrun simctl runtime delete all || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/* || true
+          # Any Xcode other than the selected one. `xcode-select -p` gives
+          # .../Xcode.app/Contents/Developer, so strip two components back to the
+          # bundle and skip that one. The assert step above already confirmed the
+          # selected toolchain is Xcode 27.
+          selected="$(dirname "$(dirname "$(xcode-select -p)")")"
+          echo "Keeping $selected"
+          for app in /Applications/Xcode*.app; do
+            [ "$app" = "$selected" ] && continue
+            echo "Removing $app"
+            sudo rm -rf "$app" || true
+          done
+          echo "=== after ==="
+          df -h /
 
       - name: Verify MetalToolchain installed
         shell: bash
