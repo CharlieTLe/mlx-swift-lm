@@ -1,0 +1,182 @@
+name: Integration Tests (xcode-27)
+
+# Fork-only experiment: run the IntegrationTesting suite on GitHub's hosted
+# `xcode-27` image instead of the self-hosted mac that integration_tests.yml
+# uses. The nightly cannot answer the question this workflow asks, because it
+# pins Xcode 26, where every `canImport(FoundationModels, _version: 2)` block
+# compiles out and the MLXFoundationModels suites simply do not exist.
+#
+# What the hosted `xcode-27` image actually is (actions/runner-images, image
+# version 20260810.0090.1, label documented as a public preview):
+#   - arm64, Xcode 27.0 beta (27A5228h) as the *default* toolchain
+#   - macOS 27.0 SDK installed
+#   - host OS is macOS 26.5.2, NOT macOS 27
+#
+# That combination exercises a tier the nightly never builds: the FM suites
+# COMPILE (the 27 SDK makes `canImport(..., _version: 2)` true) and then execute
+# at `DeviceTier.partial`, because the FM public surface is
+# `@available(macOS 27, *)` and this host is 26. See
+# IntegrationTestingTests/MLXFoundationModelsIntegration/PlatformAvailability/DeviceTier.swift.
+# So read a green run as "compiles against the 27 SDK and degrades correctly on
+# an OS 26 host", NOT as "the FoundationModels adapter works end to end".
+on:
+  # `workflow_dispatch` on its own is not enough while iterating: GitHub only
+  # offers a dispatchable workflow if the file exists on the default branch.
+  # The push trigger below lets the experiment run straight from a branch.
+  workflow_dispatch:
+    inputs:
+      only_testing:
+        description: >-
+          Optional space-separated xctest identifiers (Target/Suite or
+          Target/Suite/test) to narrow the run, e.g.
+          "IntegrationTestingTests/PlatformCompatibilityProbes". Empty runs
+          everything.
+        required: false
+        default: ''
+  push:
+    branches: ['ci/xcode-27**']
+
+permissions:
+  contents: read
+
+# Unlike integration_tests.yml this does NOT need to serialize repo-wide: every
+# run gets a fresh hosted VM with its own empty Hugging Face cache, so there is
+# no shared on-disk cache for two runs to race. Keyed by ref and cancelling in
+# progress, because this is an experiment where the newest push is the one worth
+# spending ~2h of macOS runner time on.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration_tests_xcode27:
+    # Never upstream: `!=` rather than pinning one fork, so this file behaves the
+    # same in anyone's fork but stays inert in ml-explore/mlx-swift-lm, which has
+    # its own self-hosted nightly and should not spend hosted macOS minutes here.
+    if: github.repository != 'ml-explore/mlx-swift-lm'
+    runs-on: xcode-27
+    # Higher than the nightly's 120: that machine has a warm Hugging Face cache
+    # built up over previous runs, and every run here starts cold and re-downloads
+    # every model it touches. Hosted jobs are hard-capped at 6h regardless.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      # Recorded before anything else so a failure further down can be read
+      # against the toolchain and the free space the run actually started with.
+      - name: Report toolchain and host
+        shell: bash
+        run: |
+          xcodebuild -version
+          swift --version
+          echo "macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
+          sw_vers
+          df -h /
+          # Mirrors DeviceTier.current, which classifies on the *runtime* OS
+          # version rather than #available. Printing the expectation here makes
+          # a surprising skip/failure downstream self-explanatory.
+          case "$(sw_vers -productVersion)" in
+            27.*|2[89].*|3*) echo "Expected DeviceTier: full (OS >= 27)" ;;
+            26.*)             echo "Expected DeviceTier: partial (OS 26): FM surface is @available(macOS 27, *)" ;;
+            *)                echo "Expected DeviceTier: absent (OS < 26)" ;;
+          esac
+
+      - name: Assert Xcode 27 is the selected toolchain
+        shell: bash
+        run: |
+          # The `xcode-27` label is a preview image and its default Xcode has
+          # moved before (see the runner-images announcement about macOS 26
+          # defaulting to Xcode 26.6). Fail loudly here rather than silently
+          # compiling against a 26 SDK and reporting a green run that proves
+          # nothing about Xcode 27, which is the entire point of this workflow.
+          case "$(xcodebuild -version | head -1)" in
+            "Xcode 27"*) ;;
+            *)
+              echo "::error::Expected Xcode 27, got '$(xcodebuild -version | head -1)' (DEVELOPER_DIR=${DEVELOPER_DIR:-default})."
+              exit 1
+              ;;
+          esac
+          case "$(xcrun --sdk macosx --show-sdk-version)" in
+            27.*) ;;
+            *)
+              echo "::error::Expected the macOS 27 SDK, got $(xcrun --sdk macosx --show-sdk-version). The FoundationModels suites are gated on canImport(FoundationModels, _version: 2) and would compile out."
+              exit 1
+              ;;
+          esac
+
+      - name: Verify MetalToolchain installed
+        shell: bash
+        run: |
+          # The self-hosted mac is provisioned with this already, so
+          # integration_tests.yml only has to assert it. The hosted image ships
+          # WITHOUT it, and mlx-swift compiles .metal sources during the build
+          # (mlx-swift_Cmlx), so install it on demand instead of failing.
+          #
+          # Parse `Status:` rather than trusting the exit code: -showComponent
+          # exits 0 and prints "Status: uninstalled" when the component is
+          # absent, so an `if xcodebuild -showComponent ...` guard silently
+          # succeeds and the build then dies much later on the first
+          # CompileMetalFile with "cannot execute tool 'metal'".
+          component_status() {
+            xcodebuild -showComponent MetalToolchain 2>&1 \
+              | awk -F': *' '/^Status:/ { print tolower($2); exit }'
+          }
+          if [ "$(component_status)" = "installed" ]; then
+            echo "MetalToolchain already installed."
+          else
+            echo "MetalToolchain reports '$(component_status)'; downloading."
+            xcodebuild -downloadComponent MetalToolchain
+            if [ "$(component_status)" != "installed" ]; then
+              echo "::error::MetalToolchain still reports '$(component_status)' after -downloadComponent."
+              exit 1
+            fi
+            echo "MetalToolchain installed."
+          fi
+
+      - name: Run IntegrationTesting tests (Xcode, macOS)
+        shell: bash
+        env:
+          # Read through the environment rather than interpolating ${{ }} into
+          # the script body, so a dispatch input cannot inject shell.
+          ONLY_TESTING: ${{ inputs.only_testing }}
+        run: |
+          # Same single-worker rule as the nightly: the model-dependent suites are
+          # `@Suite(.serialized)` and share one on-disk Hugging Face cache, so
+          # concurrent xctest workers race it (see
+          # IntegrationTestingTests/MLXFoundationModelsIntegration/Support/FMTestHelpers.swift).
+          set -- xcodebuild test \
+            -project IntegrationTesting/IntegrationTesting.xcodeproj \
+            -scheme IntegrationTesting \
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            -skipPackagePluginValidation \
+            -resultBundlePath IntegrationTesting.xcresult
+          # Expand the input into one -only-testing: flag per identifier instead
+          # of passing it through as raw argv, so the input stays a list of test
+          # identifiers and not arbitrary xcodebuild options.
+          for identifier in $ONLY_TESTING; do
+            set -- "$@" "-only-testing:$identifier"
+          done
+          echo "+ $*"
+          "$@"
+
+      # Runs on success too: on a cold VM the interesting question is often "did
+      # it come close to filling the disk", which a green run hides.
+      - name: Report disk usage after testing
+        if: always()
+        shell: bash
+        run: |
+          df -h /
+          du -sh ~/.cache/huggingface 2>/dev/null || echo "no Hugging Face cache"
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results-xcode27
+          path: |
+            IntegrationTesting.xcresult
+            ~/Library/Logs/DiagnosticReports/*
+          retention-days: 7
