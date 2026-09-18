@@ -26,62 +26,36 @@ name: Integration Tests (xcode-27)
 # IntegrationTestingTests/MLXFoundationModelsIntegration/PlatformAvailability/DeviceTier.swift.
 # A green run here does mean "the FoundationModels adapter works end to end".
 #
-# Why this is sharded. Run 35178760598 ran the whole suite in one job and hit
-# ENOSPC 22 minutes in with a 28G Hugging Face cache and models still queued; 12
-# of its 17 issues were ENOSPC or truncated downloads. Each matrix shard is a
-# separate VM with a separate empty cache, so it downloads only what its own
-# suites touch. That bounds peak disk per job and runs the shards in parallel.
+# Why this is sharded, and why into exactly five. The hosted macOS runner limit
+# is 5 concurrent jobs, measured in runs 35302803992 and 35374058521: five start
+# at once and the sixth waits for a free slot. So wall clock is roughly total
+# machine time divided by five, and each shard pays a fixed ~4.5 minutes of
+# checkout, 839 MB MetalToolchain download and cold build. More shards means
+# more of that overhead and a SLOWER run, not a faster one. Eight shards cost 81
+# minutes of machine time, 36 of it overhead, for a 25m47s wall clock.
 #
-# Repo size is NOT download size, which an earlier revision of this comment got
-# wrong by quoting ~85 GB of Hugging Face repo sizes as the suite's footprint.
-# The tokenizer suites fetch tokenizer and config files only, ~27M measured, not
-# the 19.4G and 12.1G their repos weigh, so the real full-suite total is nearer
-# 53 GB. Still far past ~36Gi, so the conclusion holds, but budget from measured
-# downloads rather than repo sizes.
+# Shards are therefore balanced by MEASURED suite time, not by directory, which
+# is why their contents look arbitrary. Suite times are wildly non-uniform:
+# MultiModelGuidedGeneration 309s, ToolCallIntegration dialects 255s,
+# GuidedGeneration 220s, CoherenceIntegration 210s, Reranker 155s,
+# GenerableRoundTrip 144s, against a long tail of sub-10s suites. Grouping by
+# directory produced a 757s shard next to a 280s one and a 21m24s wall clock.
+# Total is ~2278s, so five bins of ~456s each land at ~12 minutes.
 #
-# Repo sizes, useful only as upper bounds:
-#   gemma-4-31b-it-8bit 33.8  Muse-Glimmer-30B-4bit 19.4  gpt-oss-20b-Q8 12.1
-#   gemma-4-e4b 5.2  gemma-4-e2b 3.6  Qwen3-VL-4B 3.1  Qwen3-4B 2.3
-#   Qwen2.5-3B 1.7  Qwen3-1.7B 1.0  R1-Distill-1.5B 1.0  Llama-3.2-1B 0.7
-#   gemma-3-270m 0.2  the *-assistant-bf16 MTP drafters 0.2 to 1.0 each
+# Re-balance from a real run rather than by eye. Each job prints per-suite
+# durations; feed them back into the bins when they drift.
 #
-# RAM, not disk, is the real ceiling. The sampler shows this VM has ~7.2 GB of
-# RAM and every shard runs with only 64 to 93 MB unused for its whole duration,
-# so macOS compresses and then swaps, and swap lives on the same volume as the
-# Hugging Face cache. The two limits are therefore coupled: a big cache plus a
-# big swap file exhausts the volume, and once the system cannot page the runner
-# agent is killed, which is the "lost communication" failure rather than a clean
-# ENOSPC. toolcall-dialects peaked at 6.7 GiB of swap and 15Gi free.
+# Disk is a secondary limit and RAM the real one. The sampler shows ~7.2 GB of
+# RAM with only 64 to 93 MB unused all run, so macOS compresses then swaps, and
+# swap shares the volume with the Hugging Face cache. That coupling is what
+# turns a full disk into "the hosted runner lost communication with the server"
+# rather than a clean ENOSPC. toolcall-dialects peaked at 6.7 GiB of swap.
 #
-# A model larger than RAM does not fail, it crawls. Nemotron-3-Nano-30B-A3B is
-# 17.8 GB against 7.2 GB of RAM, so it thrashes for every token:
-# nemotronEndToEnd() PASSED in run 35302803992 after 3589 seconds, one hour for
-# a single generation, and nemotronMultiTool() was still going when the job was
-# cancelled at the timeout. Budget shards as download plus ~8 GiB of swap
-# headroom, and treat roughly 5 GB as the practical per-model ceiling here.
-#
-# The four suites that load gemma-4-31b-it-8bit are deliberately in NO shard:
-# 33.8 GB against ~36Gi leaves no room for the build or for swap, and
-# MTPIteratorEndToEndDiagnosticTests also pulls e4b and e2b. They keep their
-# coverage on the self-hosted mac via integration_tests.yml, which has a warm
-# cache, real disk and real memory. Skipped by identifier in `core` below.
-#
-# The Nemotron tests DO get shards, one per test, on the theory that running
-# them concurrently is better than not running them at all. They will still be
-# slow, and each shard re-downloads the full 17.8 GB.
-#
-# The FM tree is split further (guided / toolcalling / fm-sessions) because disk
-# is not the only limit. A single 218-test shard ran 105 minutes and then died
-# with "The hosted runner lost communication with the server" (run 35293302777),
-# as did the unsharded run before it. Shorter shards on fresh VMs are the
-# hypothesis; the "Start resource sampler" step below exists to replace that
-# hypothesis with evidence, because the log GitHub returns after such a death is
-# truncated to whatever was flushed and shows nothing.
-#
-# Shard sizes by test count: guided 82, fm-sessions 58, core 48, toolcalling 30,
-# and 2 each for tokenizers, vision and gemma4-eseries. Verified against
-# `xcodebuild -enumerate-tests`: 224 of 241 tests are assigned, none twice, and
-# the 17 unassigned are exactly the MTP exclusions above.
+# Two groups are excluded because they cannot run quickly here at any shard
+# size. The four suites loading gemma-4-31b-it-8bit (33.8 GB against ~36Gi), and
+# the three Nemotron tool-call tests: Nemotron-3-Nano-30B-A3B is 17.8 GB against
+# 7.2 GB of RAM, so it thrashes and nemotronEndToEnd took 3589s to PASS. Both
+# keep their coverage on the self-hosted mac via integration_tests.yml.
 #
 # Measured results so far: tokenizers, vision and gemma4-eseries green in 4 to
 # 5.5 minutes each. gemma4-eseries is a no-op on a fresh VM: both its tests are
@@ -128,7 +102,7 @@ jobs:
     # has started swap-thrashing fail in an hour rather than three: the old 180
     # only bought toolcall-nemotron the right to burn a full three hours before
     # being cancelled mid-test.
-    timeout-minutes: 30
+    timeout-minutes: 25
     name: xcode27 (${{ matrix.shard.name }})
     strategy:
       # Every shard is an independent disk budget and an independent question.
@@ -137,33 +111,93 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # Catch-all, and skip-based on purpose: a newly added suite lands here
-          # rather than silently running in no shard. Holds the root-level
-          # Coherence / Gemma4Assistant / Reranker suites and the file-scope
-          # tests. Skipping ToolCallIntegrationTests wholesale is also what
-          # excludes the three Nemotron tests, since fm-rest selects only the
-          # eleven non-Nemotron ones by name.
-          - name: core
-            needs_gb: 20
+          - name: shard1
+            needs_gb: 24
+            only: >-
+              IntegrationTestingTests/MultiModelGuidedGenerationTests
+              IntegrationTestingTests/FoundationModelsToolCallingTests
+              IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/ReasoningIntegrationTests
+              IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/StopTokenRegressionIntegrationTests
+              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
+              IntegrationTestingTests/MalformedSchemaErrorParityTests
+          - name: shard2
+            needs_gb: 24
+            only: >-
+              IntegrationTestingTests/ToolCallIntegrationTests/glm4FormatAutoDetection()
+              IntegrationTestingTests/ToolCallIntegrationTests/glm4EndToEnd()
+              IntegrationTestingTests/ToolCallIntegrationTests/lfm2FormatAutoDetection()
+              IntegrationTestingTests/ToolCallIntegrationTests/lfm2EndToEnd()
+              IntegrationTestingTests/ToolCallIntegrationTests/mistral3FormatAutoDetection()
+              IntegrationTestingTests/ToolCallIntegrationTests/mistral3EndToEnd()
+              IntegrationTestingTests/ToolCallIntegrationTests/mistral3MultiTool()
+              IntegrationTestingTests/ToolCallIntegrationTests/qwen35FormatAutoDetection()
+              IntegrationTestingTests/ToolCallIntegrationTests/qwen35EndToEnd()
+              IntegrationTestingTests/ToolCallIntegrationTests/qwen35MultiTool()
+              IntegrationTestingTests/ToolCallIntegrationTests/qwen35StructuredToolContinuation()
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/ConfigurationResolverRoutingTests
+              IntegrationTestingTests/ToolCallingReasoningTests
+              IntegrationTestingTests/GoldenReplayTests
+              IntegrationTestingTests/RequiredPropertyStressTests
+              IntegrationTestingTests/PlainChatGenerationTests
+              IntegrationTestingTests/TokenizerVocabExtractorTests
+              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/CoherenceFullIntegrationTests
+              IntegrationTestingTests/GoldenFixtureManifestTests
+          - name: shard3
+            needs_gb: 24
+            only: >-
+              IntegrationTestingTests/GuidedGenerationTests
+              IntegrationTestingTests/MultiTurnToolCallingTests
+              IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
+              IntegrationTestingTests/Gemma4AssistantIntegrationTests
+              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
+              IntegrationTestingTests/ToolCallRoundTripTests
+              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
+              IntegrationTestingTests/RollbackDeterminismTests
+              IntegrationTestingTests/StructuredToolOutputSessionTests
+              IntegrationTestingTests/ReasoningFamilyVerificationTests
+          - name: shard4
+            needs_gb: 24
+            only: >-
+              IntegrationTestingTests/CoherenceIntegrationTests
+              IntegrationTestingTests/GuidedGenerationBenchmarkTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/ReasoningCapabilityGateTests
+              IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
+              IntegrationTestingTests/MaxTokenTruncationTests
+              IntegrationTestingTests/SessionUsageAccountingTests
+              IntegrationTestingTests/PlatformCompatibilityProbes
+              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
+          - name: shard5
+            needs_gb: 24
+            # Catch-all. Skips every suite the other four select, so a newly
+            # added suite runs here rather than silently in no shard. Skipping
+            # ToolCallIntegrationTests wholesale also excludes the three Nemotron
+            # tests; shard with DIALECTS selects the eleven others by name.
             skip: >-
               IntegrationTestingTests/ApplyChatTemplateProbeTests
-              IntegrationTestingTests/ColdHubClientFetchTests
+              IntegrationTestingTests/CoherenceFullIntegrationTests
+              IntegrationTestingTests/CoherenceIntegrationTests
               IntegrationTestingTests/ConfigurationResolverRoutingTests
               IntegrationTestingTests/EmitStopSignalTests
               IntegrationTestingTests/FastForwardTokenizationDisagreementTests
               IntegrationTestingTests/ForkIndependenceTests
               IntegrationTestingTests/FoundationModelsToolCallingTests
-              IntegrationTestingTests/GenerableRoundTripTests
+              IntegrationTestingTests/Gemma4AssistantIntegrationTests
+              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
               IntegrationTestingTests/GoldenFixtureManifestTests
               IntegrationTestingTests/GoldenReplayTests
               IntegrationTestingTests/GuidedGenerationBenchmarkTests
-              IntegrationTestingTests/GuidedGenerationIntegrationTests
               IntegrationTestingTests/GuidedGenerationTests
               IntegrationTestingTests/GuidedGenerationUsageTests
-              IntegrationTestingTests/HardReserveStressTests
-              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
               IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
-              IntegrationTestingTests/IntegrationTests
               IntegrationTestingTests/LoopInvariantsOnXGrammarTests
               IntegrationTestingTests/MTPIteratorEndToEndDiagnosticTests
               IntegrationTestingTests/MalformedSchemaErrorParityTests
@@ -180,7 +214,6 @@ jobs:
               IntegrationTestingTests/RequiredPropertyStressTests
               IntegrationTestingTests/RollbackDeterminismTests
               IntegrationTestingTests/Rung4TokenParityTests
-              IntegrationTestingTests/SamplingModeBehaviorTests
               IntegrationTestingTests/SessionUsageAccountingTests
               IntegrationTestingTests/StaleWeightIndexIntegrationTests
               IntegrationTestingTests/StopTokenRegressionIntegrationTests
@@ -193,86 +226,8 @@ jobs:
               IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
               IntegrationTestingTests/ToolCallingReasoningTests
               IntegrationTestingTests/UpdateUsageEmissionTests
-              IntegrationTestingTests/VisionIntegrationTests
-              IntegrationTestingTests/XGrammarBridgeTests
               IntegrationTestingTests/testAcceptanceRateFloor64TokenBlock4Temp0()
               IntegrationTestingTests/testMTPMidGenerationKVQuantizationCompletesWithoutCrash()
-          # GenerableRoundTrip plus the Grammar subdirectory, and the three cheap
-          # model suites (Qwen3-VL 2.9G, and the two tokenizer-only suites at
-          # ~27M) used as ballast to level this shard against the others.
-          - name: guided-a
-            needs_gb: 16
-            only: >-
-              IntegrationTestingTests/GenerableRoundTripTests
-              IntegrationTestingTests/TokenizerVocabExtractorTests
-              IntegrationTestingTests/XGrammarBridgeTests
-              IntegrationTestingTests/EmitStopSignalTests
-              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
-              IntegrationTestingTests/ForkIndependenceTests
-              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
-              IntegrationTestingTests/RollbackDeterminismTests
-              IntegrationTestingTests/VisionIntegrationTests
-              IntegrationTestingTests/StaleWeightIndexIntegrationTests
-              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
-              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
-          # The rest of MLXFoundationModelsIntegration/GuidedGeneration.
-          - name: guided-b
-            needs_gb: 12
-            only: >-
-              IntegrationTestingTests/GuidedGenerationTests
-              IntegrationTestingTests/GuidedGenerationIntegrationTests
-              IntegrationTestingTests/MultiModelGuidedGenerationTests
-              IntegrationTestingTests/HardReserveStressTests
-              IntegrationTestingTests/GuidedGenerationBenchmarkTests
-              IntegrationTestingTests/GuidedGenerationUsageTests
-              IntegrationTestingTests/MaxTokenTruncationTests
-              IntegrationTestingTests/PrewarmGrammarTests
-              IntegrationTestingTests/RequiredPropertyStressTests
-              IntegrationTestingTests/StopTokenRegressionIntegrationTests
-          # MLXFoundationModelsIntegration/ToolCalling.
-          - name: toolcalling
-            needs_gb: 16
-            only: >-
-              IntegrationTestingTests/FoundationModelsToolCallingTests
-              IntegrationTestingTests/ToolCallingReasoningTests
-              IntegrationTestingTests/MultiTurnToolCallingTests
-              IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
-              IntegrationTestingTests/StructuredToolOutputSessionTests
-              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
-              IntegrationTestingTests/ToolCallRoundTripTests
-          # TextGeneration, Reasoning, PlatformAvailability and GoldenReplay,
-          # plus the eleven non-Nemotron ToolCallIntegrationTests dialects.
-          - name: fm-rest
-            needs_gb: 24
-            only: >-
-              IntegrationTestingTests/IntegrationTests
-              IntegrationTestingTests/SessionUsageAccountingTests
-              IntegrationTestingTests/UpdateUsageEmissionTests
-              IntegrationTestingTests/ApplyChatTemplateProbeTests
-              IntegrationTestingTests/StreamingDeltaTests
-              IntegrationTestingTests/PlainChatGenerationTests
-              IntegrationTestingTests/SamplingModeBehaviorTests
-              IntegrationTestingTests/ReasoningIntegrationTests
-              IntegrationTestingTests/ReasoningCapabilityGateTests
-              IntegrationTestingTests/ReasoningFamilyVerificationTests
-              IntegrationTestingTests/ConfigurationResolverRoutingTests
-              IntegrationTestingTests/PlatformCompatibilityProbes
-              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
-              IntegrationTestingTests/ColdHubClientFetchTests
-              IntegrationTestingTests/GoldenReplayTests
-              IntegrationTestingTests/GoldenFixtureManifestTests
-              IntegrationTestingTests/MalformedSchemaErrorParityTests
-              IntegrationTestingTests/ToolCallIntegrationTests/glm4FormatAutoDetection()
-              IntegrationTestingTests/ToolCallIntegrationTests/glm4EndToEnd()
-              IntegrationTestingTests/ToolCallIntegrationTests/lfm2FormatAutoDetection()
-              IntegrationTestingTests/ToolCallIntegrationTests/lfm2EndToEnd()
-              IntegrationTestingTests/ToolCallIntegrationTests/mistral3FormatAutoDetection()
-              IntegrationTestingTests/ToolCallIntegrationTests/mistral3EndToEnd()
-              IntegrationTestingTests/ToolCallIntegrationTests/mistral3MultiTool()
-              IntegrationTestingTests/ToolCallIntegrationTests/qwen35FormatAutoDetection()
-              IntegrationTestingTests/ToolCallIntegrationTests/qwen35EndToEnd()
-              IntegrationTestingTests/ToolCallIntegrationTests/qwen35MultiTool()
-              IntegrationTestingTests/ToolCallIntegrationTests/qwen35StructuredToolContinuation()
     steps:
       - uses: actions/checkout@v6
         with:
