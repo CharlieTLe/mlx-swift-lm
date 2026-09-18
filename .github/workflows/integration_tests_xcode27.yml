@@ -128,7 +128,7 @@ jobs:
     # has started swap-thrashing fail in an hour rather than three: the old 180
     # only bought toolcall-nemotron the right to burn a full three hours before
     # being cancelled mid-test.
-    timeout-minutes: ${{ matrix.shard.timeout_minutes || 60 }}
+    timeout-minutes: 30
     name: xcode27 (${{ matrix.shard.name }})
     strategy:
       # Every shard is an independent disk budget and an independent question.
@@ -137,71 +137,88 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          # Catch-all, and deliberately skip-based rather than only-based: a
-          # newly added suite lands here automatically instead of silently
-          # running in no shard at all. Holds the root-level suites.
+          # Catch-all, and skip-based on purpose: a newly added suite lands here
+          # rather than silently running in no shard. Holds the root-level
+          # Coherence / Gemma4Assistant / Reranker suites and the file-scope
+          # tests. Skipping ToolCallIntegrationTests wholesale is also what
+          # excludes the three Nemotron tests, since fm-rest selects only the
+          # eleven non-Nemotron ones by name.
           - name: core
-            needs_gb: 16
+            needs_gb: 20
             skip: >-
-              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+              IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/ColdHubClientFetchTests
+              IntegrationTestingTests/ConfigurationResolverRoutingTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
+              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/FoundationModelsToolCallingTests
+              IntegrationTestingTests/GenerableRoundTripTests
+              IntegrationTestingTests/GoldenFixtureManifestTests
+              IntegrationTestingTests/GoldenReplayTests
+              IntegrationTestingTests/GuidedGenerationBenchmarkTests
+              IntegrationTestingTests/GuidedGenerationIntegrationTests
+              IntegrationTestingTests/GuidedGenerationTests
+              IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/HardReserveStressTests
               IntegrationTestingTests/HarmonyTokenizerIntegrationTests
-              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
-              IntegrationTestingTests/VisionIntegrationTests
-              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
+              IntegrationTestingTests/IntegrationTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
               IntegrationTestingTests/MTPIteratorEndToEndDiagnosticTests
+              IntegrationTestingTests/MalformedSchemaErrorParityTests
+              IntegrationTestingTests/MaxTokenTruncationTests
+              IntegrationTestingTests/MultiModelGuidedGenerationTests
+              IntegrationTestingTests/MultiTurnToolCallingTests
+              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+              IntegrationTestingTests/PlainChatGenerationTests
+              IntegrationTestingTests/PlatformCompatibilityProbes
+              IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/ReasoningCapabilityGateTests
+              IntegrationTestingTests/ReasoningFamilyVerificationTests
+              IntegrationTestingTests/ReasoningIntegrationTests
+              IntegrationTestingTests/RequiredPropertyStressTests
+              IntegrationTestingTests/RollbackDeterminismTests
               IntegrationTestingTests/Rung4TokenParityTests
+              IntegrationTestingTests/SamplingModeBehaviorTests
+              IntegrationTestingTests/SessionUsageAccountingTests
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/StopTokenRegressionIntegrationTests
+              IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/StructuredToolOutputSessionTests
+              IntegrationTestingTests/TokenizerVocabExtractorTests
+              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
+              IntegrationTestingTests/ToolCallIntegrationTests
+              IntegrationTestingTests/ToolCallRoundTripTests
+              IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
+              IntegrationTestingTests/ToolCallingReasoningTests
+              IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/VisionIntegrationTests
+              IntegrationTestingTests/XGrammarBridgeTests
               IntegrationTestingTests/testAcceptanceRateFloor64TokenBlock4Temp0()
               IntegrationTestingTests/testMTPMidGenerationKVQuantizationCompletesWithoutCrash()
-              IntegrationTestingTests/GenerableRoundTripTests
-              IntegrationTestingTests/GuidedGenerationTests
-              IntegrationTestingTests/GuidedGenerationIntegrationTests
-              IntegrationTestingTests/MultiModelGuidedGenerationTests
-              IntegrationTestingTests/HardReserveStressTests
-              IntegrationTestingTests/GuidedGenerationBenchmarkTests
-              IntegrationTestingTests/GuidedGenerationUsageTests
-              IntegrationTestingTests/MaxTokenTruncationTests
-              IntegrationTestingTests/PrewarmGrammarTests
-              IntegrationTestingTests/RequiredPropertyStressTests
-              IntegrationTestingTests/StopTokenRegressionIntegrationTests
-              IntegrationTestingTests/TokenizerVocabExtractorTests
-              IntegrationTestingTests/XGrammarBridgeTests
-              IntegrationTestingTests/EmitStopSignalTests
-              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
-              IntegrationTestingTests/ForkIndependenceTests
-              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
-              IntegrationTestingTests/RollbackDeterminismTests
-              IntegrationTestingTests/FoundationModelsToolCallingTests
-              IntegrationTestingTests/ToolCallingReasoningTests
-              IntegrationTestingTests/MultiTurnToolCallingTests
-              IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
-              IntegrationTestingTests/StructuredToolOutputSessionTests
-              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
-              IntegrationTestingTests/ToolCallRoundTripTests
-              IntegrationTestingTests/IntegrationTests
-              IntegrationTestingTests/SessionUsageAccountingTests
-              IntegrationTestingTests/UpdateUsageEmissionTests
-              IntegrationTestingTests/ApplyChatTemplateProbeTests
-              IntegrationTestingTests/StreamingDeltaTests
-              IntegrationTestingTests/PlainChatGenerationTests
-              IntegrationTestingTests/SamplingModeBehaviorTests
-              IntegrationTestingTests/ReasoningIntegrationTests
-              IntegrationTestingTests/ReasoningCapabilityGateTests
-              IntegrationTestingTests/ReasoningFamilyVerificationTests
-              IntegrationTestingTests/ConfigurationResolverRoutingTests
-              IntegrationTestingTests/PlatformCompatibilityProbes
-              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
-              IntegrationTestingTests/ColdHubClientFetchTests
-              IntegrationTestingTests/GoldenReplayTests
-              IntegrationTestingTests/GoldenFixtureManifestTests
-              IntegrationTestingTests/MalformedSchemaErrorParityTests
-              IntegrationTestingTests/ToolCallIntegrationTests
-          # MLXFoundationModelsIntegration/GuidedGeneration and its Grammar
-          # subdirectory. The largest group, and all on gemma-3-270m (0.2G) plus
-          # Llama-3.2-1B and Qwen2.5-3B for the multi-model suite.
-          - name: guided
-            needs_gb: 12
+          # GenerableRoundTrip plus the Grammar subdirectory, and the three cheap
+          # model suites (Qwen3-VL 2.9G, and the two tokenizer-only suites at
+          # ~27M) used as ballast to level this shard against the others.
+          - name: guided-a
+            needs_gb: 16
             only: >-
               IntegrationTestingTests/GenerableRoundTripTests
+              IntegrationTestingTests/TokenizerVocabExtractorTests
+              IntegrationTestingTests/XGrammarBridgeTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
+              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
+              IntegrationTestingTests/RollbackDeterminismTests
+              IntegrationTestingTests/VisionIntegrationTests
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
+          # The rest of MLXFoundationModelsIntegration/GuidedGeneration.
+          - name: guided-b
+            needs_gb: 12
+            only: >-
               IntegrationTestingTests/GuidedGenerationTests
               IntegrationTestingTests/GuidedGenerationIntegrationTests
               IntegrationTestingTests/MultiModelGuidedGenerationTests
@@ -212,17 +229,9 @@ jobs:
               IntegrationTestingTests/PrewarmGrammarTests
               IntegrationTestingTests/RequiredPropertyStressTests
               IntegrationTestingTests/StopTokenRegressionIntegrationTests
-              IntegrationTestingTests/TokenizerVocabExtractorTests
-              IntegrationTestingTests/XGrammarBridgeTests
-              IntegrationTestingTests/EmitStopSignalTests
-              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
-              IntegrationTestingTests/ForkIndependenceTests
-              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
-              IntegrationTestingTests/RollbackDeterminismTests
-          # MLXFoundationModelsIntegration/ToolCalling. Qwen3-1.7B and
-          # R1-Distill-1.5B, plus Qwen2.5-3B as the default model.
+          # MLXFoundationModelsIntegration/ToolCalling.
           - name: toolcalling
-            needs_gb: 12
+            needs_gb: 16
             only: >-
               IntegrationTestingTests/FoundationModelsToolCallingTests
               IntegrationTestingTests/ToolCallingReasoningTests
@@ -231,10 +240,10 @@ jobs:
               IntegrationTestingTests/StructuredToolOutputSessionTests
               IntegrationTestingTests/ToolCallGrammarCharacterizationTests
               IntegrationTestingTests/ToolCallRoundTripTests
-          # MLXFoundationModelsIntegration TextGeneration, Reasoning,
-          # PlatformAvailability and GoldenReplay.
-          - name: fm-sessions
-            needs_gb: 14
+          # TextGeneration, Reasoning, PlatformAvailability and GoldenReplay,
+          # plus the eleven non-Nemotron ToolCallIntegrationTests dialects.
+          - name: fm-rest
+            needs_gb: 24
             only: >-
               IntegrationTestingTests/IntegrationTests
               IntegrationTestingTests/SessionUsageAccountingTests
@@ -253,33 +262,6 @@ jobs:
               IntegrationTestingTests/GoldenReplayTests
               IntegrationTestingTests/GoldenFixtureManifestTests
               IntegrationTestingTests/MalformedSchemaErrorParityTests
-          # ToolCallIntegrationTests is one suite spanning six models declared in
-          # Libraries/IntegrationTestHelpers, so it splits by test rather than by
-          # suite.
-          #
-          # The three Nemotron tests get one shard each. They share a 17.8 GB
-          # model against 7.2 GB of RAM, so they thrash and cannot be made fast
-          # here; one shard each at least runs them concurrently instead of
-          # summing their runtimes, which is what blew the old 180 minute cap.
-          # Measured in run 35302803992: detect 193s, e2e 3589s, and multitool
-          # still going when the job was cancelled, so its duration is unknown
-          # and its timeout is a guess. Each VM re-downloads the full 17.8 GB.
-          - name: toolcall-nemotron-detect
-            needs_gb: 30
-            timeout_minutes: 60
-            only: IntegrationTestingTests/ToolCallIntegrationTests/nemotronFormatAutoDetection()
-          - name: toolcall-nemotron-e2e
-            needs_gb: 30
-            timeout_minutes: 150
-            only: IntegrationTestingTests/ToolCallIntegrationTests/nemotronEndToEnd()
-          - name: toolcall-nemotron-multitool
-            needs_gb: 30
-            timeout_minutes: 150
-            only: IntegrationTestingTests/ToolCallIntegrationTests/nemotronMultiTool()
-          # GLM-4-9B 5.3G, Ministral-3-3B 2.8G, Qwen3.5-2B 1.7G, LFM2-2.6B 1.5G.
-          - name: toolcall-dialects
-            needs_gb: 20
-            only: >-
               IntegrationTestingTests/ToolCallIntegrationTests/glm4FormatAutoDetection()
               IntegrationTestingTests/ToolCallIntegrationTests/glm4EndToEnd()
               IntegrationTestingTests/ToolCallIntegrationTests/lfm2FormatAutoDetection()
@@ -291,25 +273,6 @@ jobs:
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35EndToEnd()
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35MultiTool()
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35StructuredToolContinuation()
-          # Tokenizer-only: these pull tokenizer and config files, ~27M, NOT the
-          # 19.4G and 12.1G weight sets their repo sizes suggest.
-          - name: tokenizers
-            needs_gb: 8
-            only: >-
-              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
-              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
-          # Qwen3-VL-4B-Instruct-4bit, 2.9G measured.
-          - name: vision
-            needs_gb: 9
-            only: >-
-              IntegrationTestingTests/VisionIntegrationTests
-              IntegrationTestingTests/StaleWeightIndexIntegrationTests
-          # Cache-gated by design: `.enabled(if: hfSnapshotDir(...) != nil)`, so
-          # both tests are DISABLED on a fresh VM and this shard is a no-op here.
-          # Kept so the identifiers stay covered if that gate ever changes.
-          - name: gemma4-eseries
-            needs_gb: 8
-            only: IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
     steps:
       - uses: actions/checkout@v6
         with:
