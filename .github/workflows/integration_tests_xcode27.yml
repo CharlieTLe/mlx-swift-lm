@@ -40,10 +40,20 @@ name: Integration Tests (xcode-27)
 # GuidedGeneration 220s, CoherenceIntegration 210s, Reranker 155s,
 # GenerableRoundTrip 144s, against a long tail of sub-10s suites. Grouping by
 # directory produced a 757s shard next to a 280s one and a 21m24s wall clock.
-# Total is ~2330s, so five bins of ~466s each land at ~12.4 minutes.
+# Total is ~2278s, so five bins of ~456s each land at ~12 minutes.
 #
-# Re-balance from a real run rather than by eye. Each job prints per-suite
-# durations; feed them back into the bins when they drift.
+# Do NOT re-balance by historical suite seconds. That was tried in
+# 72f607ab and made the run slower, 13m26s to 17m30s, because suite time is
+# not a property of the suite: it depends on the shard's total model
+# footprint. A shard holding 18G of models thrashes swap and its tests crawl,
+# while one holding 3.7G runs 49 tests in 396s. Feeding measured times back
+# into a bin-packer therefore chases its own tail, and the same suite varied
+# 1.6x to 5x between two runs (MultiTurnToolCalling 138s then 219s,
+# FastForwardTokenizationDisagreement 12s then 60s).
+#
+# If you re-balance, balance the per-shard MODEL FOOTPRINT and keep suites
+# that share a model together, so each model is downloaded once and stays
+# resident. Confirm against a real run before keeping the change.
 #
 # Disk is a secondary limit and RAM the real one. The sampler shows ~7.2 GB of
 # RAM with only 64 to 93 MB unused all run, so macOS compresses then swaps, and
@@ -115,12 +125,15 @@ jobs:
             needs_gb: 24
             only: >-
               IntegrationTestingTests/MultiModelGuidedGenerationTests
-              IntegrationTestingTests/ConfigurationResolverRoutingTests
-              IntegrationTestingTests/ToolCallRoundTripTests
-              IntegrationTestingTests/GoldenReplayTests
-              IntegrationTestingTests/RollbackDeterminismTests
-              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
-              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
+              IntegrationTestingTests/FoundationModelsToolCallingTests
+              IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/ReasoningIntegrationTests
+              IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/StopTokenRegressionIntegrationTests
+              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
+              IntegrationTestingTests/MalformedSchemaErrorParityTests
           - name: shard2
             needs_gb: 24
             only: >-
@@ -135,81 +148,87 @@ jobs:
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35EndToEnd()
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35MultiTool()
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35StructuredToolContinuation()
-              IntegrationTestingTests/HardReserveStressTests
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/ConfigurationResolverRoutingTests
+              IntegrationTestingTests/ToolCallingReasoningTests
+              IntegrationTestingTests/GoldenReplayTests
+              IntegrationTestingTests/RequiredPropertyStressTests
+              IntegrationTestingTests/PlainChatGenerationTests
               IntegrationTestingTests/TokenizerVocabExtractorTests
-              IntegrationTestingTests/EmitStopSignalTests
-              IntegrationTestingTests/Gemma4AssistantIntegrationTests
-              IntegrationTestingTests/GuidedGenerationUsageTests
-              IntegrationTestingTests/GuidedGenerationIntegrationTests
-              IntegrationTestingTests/MaxTokenTruncationTests
+              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/CoherenceFullIntegrationTests
+              IntegrationTestingTests/GoldenFixtureManifestTests
           - name: shard3
             needs_gb: 24
             only: >-
               IntegrationTestingTests/GuidedGenerationTests
-              IntegrationTestingTests/ReasoningIntegrationTests
-              IntegrationTestingTests/ToolCallingReasoningTests
-              IntegrationTestingTests/ApplyChatTemplateProbeTests
-              IntegrationTestingTests/SamplingModeBehaviorTests
+              IntegrationTestingTests/MultiTurnToolCallingTests
               IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
+              IntegrationTestingTests/Gemma4AssistantIntegrationTests
+              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
+              IntegrationTestingTests/ToolCallRoundTripTests
               IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
-              IntegrationTestingTests/UpdateUsageEmissionTests
-              IntegrationTestingTests/PlatformCompatibilityProbes
-              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
-              IntegrationTestingTests/StopTokenRegressionIntegrationTests
-              IntegrationTestingTests/GoldenFixtureManifestTests
-              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
-              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
+              IntegrationTestingTests/RollbackDeterminismTests
+              IntegrationTestingTests/StructuredToolOutputSessionTests
+              IntegrationTestingTests/ReasoningFamilyVerificationTests
           - name: shard4
             needs_gb: 24
             only: >-
-              IntegrationTestingTests/GenerableRoundTripTests
+              IntegrationTestingTests/CoherenceIntegrationTests
               IntegrationTestingTests/GuidedGenerationBenchmarkTests
-              IntegrationTestingTests/RerankerModelIntegrationTests
-              IntegrationTestingTests/ReasoningFamilyVerificationTests
-              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
-              IntegrationTestingTests/XGrammarBridgeTests
-              IntegrationTestingTests/PrewarmGrammarTests
-              IntegrationTestingTests/StreamingDeltaTests
-              IntegrationTestingTests/PlainChatGenerationTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/ReasoningCapabilityGateTests
+              IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
+              IntegrationTestingTests/MaxTokenTruncationTests
+              IntegrationTestingTests/SessionUsageAccountingTests
+              IntegrationTestingTests/PlatformCompatibilityProbes
+              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
           - name: shard5
             needs_gb: 24
-            # Catch-all. Skips every suite the other four select, so a new
-            # suite runs here rather than silently in no shard. Skipping
-            # ToolCallIntegrationTests also excludes the three Nemotron tests;
-            # the dialect shard selects the eleven others by name.
+            # Catch-all. Skips every suite the other four select, so a newly
+            # added suite runs here rather than silently in no shard. Skipping
+            # ToolCallIntegrationTests wholesale also excludes the three Nemotron
+            # tests; shard with DIALECTS selects the eleven others by name.
             skip: >-
               IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/CoherenceFullIntegrationTests
+              IntegrationTestingTests/CoherenceIntegrationTests
               IntegrationTestingTests/ConfigurationResolverRoutingTests
               IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
               IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/FoundationModelsToolCallingTests
               IntegrationTestingTests/Gemma4AssistantIntegrationTests
               IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
-              IntegrationTestingTests/GenerableRoundTripTests
               IntegrationTestingTests/GoldenFixtureManifestTests
               IntegrationTestingTests/GoldenReplayTests
               IntegrationTestingTests/GuidedGenerationBenchmarkTests
-              IntegrationTestingTests/GuidedGenerationIntegrationTests
               IntegrationTestingTests/GuidedGenerationTests
               IntegrationTestingTests/GuidedGenerationUsageTests
-              IntegrationTestingTests/HardReserveStressTests
-              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
               IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
               IntegrationTestingTests/LoopInvariantsOnXGrammarTests
               IntegrationTestingTests/MTPIteratorEndToEndDiagnosticTests
+              IntegrationTestingTests/MalformedSchemaErrorParityTests
               IntegrationTestingTests/MaxTokenTruncationTests
               IntegrationTestingTests/MultiModelGuidedGenerationTests
+              IntegrationTestingTests/MultiTurnToolCallingTests
               IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
               IntegrationTestingTests/PlainChatGenerationTests
               IntegrationTestingTests/PlatformCompatibilityProbes
               IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/ReasoningCapabilityGateTests
               IntegrationTestingTests/ReasoningFamilyVerificationTests
               IntegrationTestingTests/ReasoningIntegrationTests
-              IntegrationTestingTests/RerankerModelIntegrationTests
+              IntegrationTestingTests/RequiredPropertyStressTests
               IntegrationTestingTests/RollbackDeterminismTests
               IntegrationTestingTests/Rung4TokenParityTests
-              IntegrationTestingTests/SamplingModeBehaviorTests
+              IntegrationTestingTests/SessionUsageAccountingTests
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
               IntegrationTestingTests/StopTokenRegressionIntegrationTests
               IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/StructuredToolOutputSessionTests
               IntegrationTestingTests/TokenizerVocabExtractorTests
               IntegrationTestingTests/ToolCallGrammarCharacterizationTests
               IntegrationTestingTests/ToolCallIntegrationTests
@@ -217,7 +236,6 @@ jobs:
               IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
               IntegrationTestingTests/ToolCallingReasoningTests
               IntegrationTestingTests/UpdateUsageEmissionTests
-              IntegrationTestingTests/XGrammarBridgeTests
               IntegrationTestingTests/testAcceptanceRateFloor64TokenBlock4Temp0()
               IntegrationTestingTests/testMTPMidGenerationKVQuantizationCompletesWithoutCrash()
     steps:
