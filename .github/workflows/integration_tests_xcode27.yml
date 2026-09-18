@@ -6,25 +6,45 @@ name: Integration Tests (xcode-27)
 # pins Xcode 26, where every `canImport(FoundationModels, _version: 2)` block
 # compiles out and the MLXFoundationModels suites simply do not exist.
 #
-# What the hosted `xcode-27` image actually is, measured on 2026-09-17 rather
-# than read off actions/runner-images metadata (image xcode-27-arm64/20260907.0173,
-# label documented as a public preview):
-#   - arm64, Xcode 27.0 beta 6 (27A5252f) as the *default* toolchain. The image
-#     lags: runner-images pins 27.0+27A266a in its toolset, and 27A266a is the
-#     released build, but the deployed image is weeks behind it.
+# What the hosted `xcode-27` image actually is, measured rather than read off
+# actions/runner-images metadata (image xcode-27-arm64, label documented as a
+# public preview):
+#   - arm64, host OS macOS 27.0 (26A5406e), so a macOS 27 host, not 26
 #   - macOS 27.0 SDK installed
-#   - host OS is macOS 27.0 (26A5406e), so this is a macOS 27 host, not 26
+#   - the default toolchain moves. 2026-09-17 morning it was Xcode 27.0 beta 6
+#     (27A5252f) in /Applications/Xcode_27_beta_6.app; by that afternoon it was
+#     the release candidate, reporting build 27A266a, in
+#     /Applications/Xcode_27_Release_Candidate.app. The assert step below is what
+#     keeps that drift honest.
 #   - MetalToolchain is NOT preinstalled; -downloadComponent fetches it in ~17s
-#   - ~37Gi free on /, one 3.3G Xcode, no simulator runtimes, so nothing
-#     meaningful to reclaim. That is not enough for the full suite: the Hugging
-#     Face cache alone reached 28G before ENOSPC. Narrow every run with
-#     only_testing (see the "Report free space" step).
+#   - ~36Gi free on /, one 3.3G Xcode, no simulator runtimes, so nothing
+#     meaningful to reclaim (see the "Report free space" step)
 #
 # So the FM suites both compile here (the 27 SDK makes
 # `canImport(..., _version: 2)` true) and execute at `DeviceTier.full`, because
 # the host satisfies the `@available(macOS 27, *)` FM surface. See
 # IntegrationTestingTests/MLXFoundationModelsIntegration/PlatformAvailability/DeviceTier.swift.
 # A green run here does mean "the FoundationModels adapter works end to end".
+#
+# Why this is sharded. The suite's models total ~85 GB against ~36Gi of disk, so
+# a single run cannot hold them: run 35178760598 reached a 28G Hugging Face cache
+# and hit ENOSPC 22 minutes in, and 12 of its 17 issues were ENOSPC or truncated
+# downloads. Each matrix shard is a separate VM with a separate empty cache, so a
+# shard only downloads what its own suites touch. That bounds peak disk per job
+# and runs the shards in parallel.
+#
+# Measured model sizes, which is what the shard boundaries follow:
+#   gemma-4-31b-it-8bit 33.8  Muse-Glimmer-30B-4bit 19.4  gpt-oss-20b-Q8 12.1
+#   gemma-4-e4b 5.2  gemma-4-e2b 3.6  Qwen3-VL-4B 3.1  Qwen3-4B 2.3
+#   Qwen2.5-3B 1.7  Qwen3-1.7B 1.0  R1-Distill-1.5B 1.0  Llama-3.2-1B 0.7
+#   gemma-3-270m 0.2  the *-assistant-bf16 MTP drafters 0.2 to 1.0 each
+#
+# The four suites that load gemma-4-31b-it-8bit are deliberately in NO shard:
+# 33.8 GB against ~36Gi leaves no room for the build, and
+# MTPIteratorEndToEndDiagnosticTests also pulls e4b and e2b for ~42.6 GB total.
+# They cannot run on this image at any shard granularity. They keep their
+# coverage on the self-hosted mac via integration_tests.yml, which has a warm
+# cache and real disk. Skipped by identifier in the `core` shard below.
 #
 # Measured results so far: PlatformCompatibilityProbes 6/6 and
 # PlainChatGenerationTests 1/1, each about 4 minutes end to end including a cold
@@ -63,12 +83,59 @@ jobs:
     # Never upstream: `!=` rather than pinning one fork, so this file behaves the
     # same in anyone's fork but stays inert in ml-explore/mlx-swift-lm, which has
     # its own self-hosted nightly and should not spend hosted macOS minutes here.
-    if: github.repository != 'ml-explore/mlx-swift-lm'
+    #
+    # A dispatch that sets only_testing runs that selection once, in `core`,
+    # rather than repeating it in all five shards.
+    if: >-
+      github.repository != 'ml-explore/mlx-swift-lm'
+      && (inputs.only_testing == '' || matrix.shard.name == 'core')
     runs-on: xcode-27
     # Higher than the nightly's 120: that machine has a warm Hugging Face cache
     # built up over previous runs, and every run here starts cold and re-downloads
     # every model it touches. Hosted jobs are hard-capped at 6h regardless.
     timeout-minutes: 180
+    name: xcode27 (${{ matrix.shard.name }})
+    strategy:
+      # Every shard is an independent disk budget and an independent question.
+      # One shard filling its disk says nothing about the others, so do not
+      # cancel them.
+      fail-fast: false
+      matrix:
+        shard:
+          # Catch-all, and deliberately skip-based rather than only-based: a
+          # newly added suite lands here automatically instead of silently
+          # running in no shard at all. Holds the whole
+          # MLXFoundationModelsIntegration tree.
+          - name: core
+            needs_gb: 20
+            skip: >-
+              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
+              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
+              IntegrationTestingTests/VisionIntegrationTests
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/MTPIteratorEndToEndDiagnosticTests
+              IntegrationTestingTests/Rung4TokenParityTests
+              IntegrationTestingTests/testAcceptanceRateFloor64TokenBlock4Temp0()
+              IntegrationTestingTests/testMTPMidGenerationKVQuantizationCompletesWithoutCrash()
+          # Muse-Glimmer-30B-4bit, 19.4 GB on its own.
+          - name: museglimmer
+            needs_gb: 24
+            only: IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+          # gpt-oss-20b-MXFP4-Q8, 12.1 GB.
+          - name: harmony
+            needs_gb: 17
+            only: IntegrationTestingTests/HarmonyTokenizerIntegrationTests
+          # gemma-4-e2b-it-4bit + gemma-4-e4b-it-4bit, 8.8 GB together.
+          - name: gemma4-eseries
+            needs_gb: 14
+            only: IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
+          # Qwen3-VL-4B-Instruct-4bit, 3.1 GB, shared by both suites.
+          - name: vision
+            needs_gb: 9
+            only: >-
+              IntegrationTestingTests/VisionIntegrationTests
+              IntegrationTestingTests/StaleWeightIndexIntegrationTests
     steps:
       - uses: actions/checkout@v6
         with:
@@ -134,19 +201,19 @@ jobs:
           df -h /
           du -sh /Applications/Xcode*.app 2>/dev/null || true
 
-          # The full suite does not fit in 37Gi. Run 35178760598 reached a 28G
-          # Hugging Face cache and hit ENOSPC 22 minutes in with models still
-          # queued, so 12 of its 17 issues were ENOSPC or truncated downloads.
-          # Fail here rather than spend an hour rediscovering that, unless the
-          # dispatch narrowed the run with only_testing.
+          # Each shard has its own fresh VM and its own empty Hugging Face cache,
+          # so it only downloads the models its own suites touch. needs_gb is
+          # that shard's measured download plus room for the build. Fail here
+          # rather than an hour into an ENOSPC.
           available_gb="$(df -g / | awk 'NR==2 { print $4 }')"
-          echo "Available: ${available_gb}Gi"
-          if [ -z "$ONLY_TESTING" ] && [ "$available_gb" -lt 60 ]; then
-            echo "::error::A full-suite run needs more than ${available_gb}Gi. The Hugging Face cache alone reached 28G before ENOSPC in run 35178760598. Narrow the run with the only_testing input, or use a runner with more disk."
+          echo "Available: ${available_gb}Gi, shard needs ${NEEDS_GB}Gi"
+          if [ -z "$ONLY_TESTING" ] && [ "$available_gb" -lt "$NEEDS_GB" ]; then
+            echo "::error::Shard needs ${NEEDS_GB}Gi but only ${available_gb}Gi is available."
             exit 1
           fi
         env:
           ONLY_TESTING: ${{ inputs.only_testing }}
+          NEEDS_GB: ${{ matrix.shard.needs_gb }}
 
       - name: Verify MetalToolchain installed
         shell: bash
@@ -183,11 +250,15 @@ jobs:
           # Read through the environment rather than interpolating ${{ }} into
           # the script body, so a dispatch input cannot inject shell.
           ONLY_TESTING: ${{ inputs.only_testing }}
+          SHARD_ONLY: ${{ matrix.shard.only }}
+          SHARD_SKIP: ${{ matrix.shard.skip }}
         run: |
-          # Same single-worker rule as the nightly: the model-dependent suites are
-          # `@Suite(.serialized)` and share one on-disk Hugging Face cache, so
-          # concurrent xctest workers race it (see
+          # Single worker *within* a shard: the model-dependent suites are
+          # `@Suite(.serialized)` and share this job's on-disk Hugging Face cache,
+          # so concurrent xctest workers race it (see
           # IntegrationTestingTests/MLXFoundationModelsIntegration/Support/FMTestHelpers.swift).
+          # Parallelism comes from the matrix instead, where each shard is a
+          # separate VM with a separate cache.
           set -- xcodebuild test \
             -project IntegrationTesting/IntegrationTesting.xcodeproj \
             -scheme IntegrationTesting \
@@ -195,12 +266,22 @@ jobs:
             -parallel-testing-enabled NO \
             -skipPackagePluginValidation \
             -resultBundlePath IntegrationTesting.xcresult
-          # Expand the input into one -only-testing: flag per identifier instead
-          # of passing it through as raw argv, so the input stays a list of test
-          # identifiers and not arbitrary xcodebuild options.
-          for identifier in $ONLY_TESTING; do
-            set -- "$@" "-only-testing:$identifier"
-          done
+          # Expand each identifier into its own flag rather than passing a string
+          # through as raw argv, so these stay test identifiers and cannot become
+          # arbitrary xcodebuild options. A dispatch's only_testing replaces the
+          # shard's own selection; the job guard keeps that to the core shard.
+          if [ -n "$ONLY_TESTING" ]; then
+            for identifier in $ONLY_TESTING; do
+              set -- "$@" "-only-testing:$identifier"
+            done
+          else
+            for identifier in $SHARD_ONLY; do
+              set -- "$@" "-only-testing:$identifier"
+            done
+            for identifier in $SHARD_SKIP; do
+              set -- "$@" "-skip-testing:$identifier"
+            done
+          fi
           echo "+ $*"
           "$@"
 
@@ -217,7 +298,9 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: integration-test-results-xcode27
+          # Per shard: upload-artifact@v4 rejects a duplicate name, so five
+          # shards uploading one name would collide.
+          name: integration-test-results-xcode27-${{ matrix.shard.name }}
           path: |
             IntegrationTesting.xcresult
             ~/Library/Logs/DiagnosticReports/*
