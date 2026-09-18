@@ -45,12 +45,29 @@ name: Integration Tests (xcode-27)
 #   Qwen2.5-3B 1.7  Qwen3-1.7B 1.0  R1-Distill-1.5B 1.0  Llama-3.2-1B 0.7
 #   gemma-3-270m 0.2  the *-assistant-bf16 MTP drafters 0.2 to 1.0 each
 #
-# The four suites that load gemma-4-31b-it-8bit are deliberately in NO shard:
-# 33.8 GB against ~36Gi leaves no room for the build, and
-# MTPIteratorEndToEndDiagnosticTests also pulls e4b and e2b. They cannot run on
-# this image at any shard granularity. They keep their coverage on the
-# self-hosted mac via integration_tests.yml, which has a warm cache and real
-# disk. Skipped by identifier in the `core` shard below.
+# RAM, not disk, is the real ceiling. The sampler shows this VM has ~7.2 GB of
+# RAM and every shard runs with only 64 to 93 MB unused for its whole duration,
+# so macOS compresses and then swaps, and swap lives on the same volume as the
+# Hugging Face cache. The two limits are therefore coupled: a big cache plus a
+# big swap file exhausts the volume, and once the system cannot page the runner
+# agent is killed, which is the "lost communication" failure rather than a clean
+# ENOSPC. toolcall-dialects peaked at 6.7 GiB of swap and 15Gi free.
+#
+# A model larger than RAM does not fail, it crawls. Nemotron-3-Nano-30B-A3B is
+# 17.8 GB against 7.2 GB of RAM, so it thrashes for every token:
+# nemotronEndToEnd() PASSED in run 35302803992 after 3589 seconds, one hour for
+# a single generation, and nemotronMultiTool() was still going when the job was
+# cancelled at the timeout. Budget shards as download plus ~8 GiB of swap
+# headroom, and treat roughly 5 GB as the practical per-model ceiling here.
+#
+# So two groups are deliberately in NO shard. The four suites that load
+# gemma-4-31b-it-8bit (33.8 GB, and MTPIteratorEndToEndDiagnosticTests also
+# pulls e4b and e2b), and the three ToolCallIntegrationTests Nemotron tests.
+# Neither can run usefully on this image at any shard granularity. Both keep
+# their coverage on the self-hosted mac via integration_tests.yml, which has a
+# warm cache, real disk and real memory. The MTP identifiers are skipped in the
+# `core` shard below; the Nemotron tests are excluded by `core` skipping the
+# whole ToolCallIntegrationTests suite while no other shard selects them.
 #
 # The FM tree is split further (guided / toolcalling / fm-sessions) because disk
 # is not the only limit. A single 218-test shard ran 105 minutes and then died
@@ -105,10 +122,12 @@ jobs:
     # its own self-hosted nightly and should not spend hosted macOS minutes here.
     if: github.repository != 'ml-explore/mlx-swift-lm'
     runs-on: xcode-27
-    # Higher than the nightly's 120: that machine has a warm Hugging Face cache
-    # built up over previous runs, and every run here starts cold and re-downloads
-    # every model it touches. Hosted jobs are hard-capped at 6h regardless.
-    timeout-minutes: 180
+    # The slowest legitimate shard is `guided` at 16 minutes, cold cache and
+    # cold build included. 60 gives generous headroom while making a shard that
+    # has started swap-thrashing fail in an hour rather than three: the old 180
+    # only bought toolcall-nemotron the right to burn a full three hours before
+    # being cancelled mid-test.
+    timeout-minutes: 60
     name: xcode27 (${{ matrix.shard.name }})
     strategy:
       # Every shard is an independent disk budget and an independent question.
@@ -235,14 +254,8 @@ jobs:
               IntegrationTestingTests/MalformedSchemaErrorParityTests
           # ToolCallIntegrationTests is one suite spanning six models declared in
           # Libraries/IntegrationTestHelpers, so it splits by test rather than by
-          # suite. Nemotron-3-Nano-30B-A3B alone is 17.8 GB and is what pushed
-          # the old core shard to a 23G cache and ENOSPC in run 35300813508.
-          - name: toolcall-nemotron
-            needs_gb: 26
-            only: >-
-              IntegrationTestingTests/ToolCallIntegrationTests/nemotronFormatAutoDetection()
-              IntegrationTestingTests/ToolCallIntegrationTests/nemotronEndToEnd()
-              IntegrationTestingTests/ToolCallIntegrationTests/nemotronMultiTool()
+          # suite. Its three Nemotron tests are in NO shard: see the RAM ceiling
+          # note in the header.
           # GLM-4-9B 5.3G, Ministral-3-3B 2.8G, Qwen3.5-2B 1.7G, LFM2-2.6B 1.5G.
           - name: toolcall-dialects
             needs_gb: 20
