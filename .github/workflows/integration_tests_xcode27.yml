@@ -83,12 +83,7 @@ jobs:
     # Never upstream: `!=` rather than pinning one fork, so this file behaves the
     # same in anyone's fork but stays inert in ml-explore/mlx-swift-lm, which has
     # its own self-hosted nightly and should not spend hosted macOS minutes here.
-    #
-    # A dispatch that sets only_testing runs that selection once, in `core`,
-    # rather than repeating it in all five shards.
-    if: >-
-      github.repository != 'ml-explore/mlx-swift-lm'
-      && (inputs.only_testing == '' || matrix.shard.name == 'core')
+    if: github.repository != 'ml-explore/mlx-swift-lm'
     runs-on: xcode-27
     # Higher than the nightly's 120: that machine has a warm Hugging Face cache
     # built up over previous runs, and every run here starts cold and re-downloads
@@ -216,6 +211,11 @@ jobs:
           NEEDS_GB: ${{ matrix.shard.needs_gb }}
 
       - name: Verify MetalToolchain installed
+        # A dispatch that sets only_testing runs that selection once, in `core`,
+        # rather than repeating it in all five shards. `matrix` is not available
+        # in a job-level `if:`, only at step level, so the guard lives here. The
+        # other shards still boot and report their toolchain, which costs seconds.
+        if: inputs.only_testing == '' || matrix.shard.name == 'core'
         shell: bash
         run: |
           # The self-hosted mac is provisioned with this already, so
@@ -245,6 +245,11 @@ jobs:
           fi
 
       - name: Run IntegrationTesting tests (Xcode, macOS)
+        # A dispatch that sets only_testing runs that selection once, in `core`,
+        # rather than repeating it in all five shards. `matrix` is not available
+        # in a job-level `if:`, only at step level, so the guard lives here. The
+        # other shards still boot and report their toolchain, which costs seconds.
+        if: inputs.only_testing == '' || matrix.shard.name == 'core'
         shell: bash
         env:
           # Read through the environment rather than interpolating ${{ }} into
