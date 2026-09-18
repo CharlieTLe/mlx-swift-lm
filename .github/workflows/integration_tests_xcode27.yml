@@ -40,7 +40,7 @@ name: Integration Tests (xcode-27)
 # GuidedGeneration 220s, CoherenceIntegration 210s, Reranker 155s,
 # GenerableRoundTrip 144s, against a long tail of sub-10s suites. Grouping by
 # directory produced a 757s shard next to a 280s one and a 21m24s wall clock.
-# Total is ~2278s, so five bins of ~456s each land at ~12 minutes.
+# Total is ~2330s, so five bins of ~466s each land at ~12.4 minutes.
 #
 # Re-balance from a real run rather than by eye. Each job prints per-suite
 # durations; feed them back into the bins when they drift.
@@ -115,15 +115,12 @@ jobs:
             needs_gb: 24
             only: >-
               IntegrationTestingTests/MultiModelGuidedGenerationTests
-              IntegrationTestingTests/FoundationModelsToolCallingTests
-              IntegrationTestingTests/ApplyChatTemplateProbeTests
-              IntegrationTestingTests/ReasoningIntegrationTests
-              IntegrationTestingTests/GuidedGenerationUsageTests
-              IntegrationTestingTests/PrewarmGrammarTests
-              IntegrationTestingTests/StreamingDeltaTests
-              IntegrationTestingTests/StopTokenRegressionIntegrationTests
-              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
-              IntegrationTestingTests/MalformedSchemaErrorParityTests
+              IntegrationTestingTests/ConfigurationResolverRoutingTests
+              IntegrationTestingTests/ToolCallRoundTripTests
+              IntegrationTestingTests/GoldenReplayTests
+              IntegrationTestingTests/RollbackDeterminismTests
+              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
           - name: shard2
             needs_gb: 24
             only: >-
@@ -138,87 +135,81 @@ jobs:
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35EndToEnd()
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35MultiTool()
               IntegrationTestingTests/ToolCallIntegrationTests/qwen35StructuredToolContinuation()
-              IntegrationTestingTests/StaleWeightIndexIntegrationTests
-              IntegrationTestingTests/ConfigurationResolverRoutingTests
-              IntegrationTestingTests/ToolCallingReasoningTests
-              IntegrationTestingTests/GoldenReplayTests
-              IntegrationTestingTests/RequiredPropertyStressTests
-              IntegrationTestingTests/PlainChatGenerationTests
+              IntegrationTestingTests/HardReserveStressTests
               IntegrationTestingTests/TokenizerVocabExtractorTests
-              IntegrationTestingTests/ForkIndependenceTests
-              IntegrationTestingTests/CoherenceFullIntegrationTests
-              IntegrationTestingTests/GoldenFixtureManifestTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/Gemma4AssistantIntegrationTests
+              IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/GuidedGenerationIntegrationTests
+              IntegrationTestingTests/MaxTokenTruncationTests
           - name: shard3
             needs_gb: 24
             only: >-
               IntegrationTestingTests/GuidedGenerationTests
-              IntegrationTestingTests/MultiTurnToolCallingTests
+              IntegrationTestingTests/ReasoningIntegrationTests
+              IntegrationTestingTests/ToolCallingReasoningTests
+              IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/SamplingModeBehaviorTests
               IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
-              IntegrationTestingTests/Gemma4AssistantIntegrationTests
-              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
-              IntegrationTestingTests/ToolCallRoundTripTests
               IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
-              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
-              IntegrationTestingTests/RollbackDeterminismTests
-              IntegrationTestingTests/StructuredToolOutputSessionTests
-              IntegrationTestingTests/ReasoningFamilyVerificationTests
+              IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/PlatformCompatibilityProbes
+              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
+              IntegrationTestingTests/StopTokenRegressionIntegrationTests
+              IntegrationTestingTests/GoldenFixtureManifestTests
+              IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
+              IntegrationTestingTests/ForkIndependenceTests
           - name: shard4
             needs_gb: 24
             only: >-
-              IntegrationTestingTests/CoherenceIntegrationTests
+              IntegrationTestingTests/GenerableRoundTripTests
               IntegrationTestingTests/GuidedGenerationBenchmarkTests
-              IntegrationTestingTests/EmitStopSignalTests
-              IntegrationTestingTests/ReasoningCapabilityGateTests
-              IntegrationTestingTests/UpdateUsageEmissionTests
-              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
-              IntegrationTestingTests/MaxTokenTruncationTests
-              IntegrationTestingTests/SessionUsageAccountingTests
-              IntegrationTestingTests/PlatformCompatibilityProbes
-              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
+              IntegrationTestingTests/RerankerModelIntegrationTests
+              IntegrationTestingTests/ReasoningFamilyVerificationTests
+              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
+              IntegrationTestingTests/XGrammarBridgeTests
+              IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/PlainChatGenerationTests
           - name: shard5
             needs_gb: 24
-            # Catch-all. Skips every suite the other four select, so a newly
-            # added suite runs here rather than silently in no shard. Skipping
-            # ToolCallIntegrationTests wholesale also excludes the three Nemotron
-            # tests; shard with DIALECTS selects the eleven others by name.
+            # Catch-all. Skips every suite the other four select, so a new
+            # suite runs here rather than silently in no shard. Skipping
+            # ToolCallIntegrationTests also excludes the three Nemotron tests;
+            # the dialect shard selects the eleven others by name.
             skip: >-
               IntegrationTestingTests/ApplyChatTemplateProbeTests
-              IntegrationTestingTests/CoherenceFullIntegrationTests
-              IntegrationTestingTests/CoherenceIntegrationTests
               IntegrationTestingTests/ConfigurationResolverRoutingTests
               IntegrationTestingTests/EmitStopSignalTests
-              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
               IntegrationTestingTests/ForkIndependenceTests
-              IntegrationTestingTests/FoundationModelsToolCallingTests
               IntegrationTestingTests/Gemma4AssistantIntegrationTests
               IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
+              IntegrationTestingTests/GenerableRoundTripTests
               IntegrationTestingTests/GoldenFixtureManifestTests
               IntegrationTestingTests/GoldenReplayTests
               IntegrationTestingTests/GuidedGenerationBenchmarkTests
+              IntegrationTestingTests/GuidedGenerationIntegrationTests
               IntegrationTestingTests/GuidedGenerationTests
               IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/HardReserveStressTests
+              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
               IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
               IntegrationTestingTests/LoopInvariantsOnXGrammarTests
               IntegrationTestingTests/MTPIteratorEndToEndDiagnosticTests
-              IntegrationTestingTests/MalformedSchemaErrorParityTests
               IntegrationTestingTests/MaxTokenTruncationTests
               IntegrationTestingTests/MultiModelGuidedGenerationTests
-              IntegrationTestingTests/MultiTurnToolCallingTests
               IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
               IntegrationTestingTests/PlainChatGenerationTests
               IntegrationTestingTests/PlatformCompatibilityProbes
               IntegrationTestingTests/PrewarmGrammarTests
-              IntegrationTestingTests/ReasoningCapabilityGateTests
               IntegrationTestingTests/ReasoningFamilyVerificationTests
               IntegrationTestingTests/ReasoningIntegrationTests
-              IntegrationTestingTests/RequiredPropertyStressTests
+              IntegrationTestingTests/RerankerModelIntegrationTests
               IntegrationTestingTests/RollbackDeterminismTests
               IntegrationTestingTests/Rung4TokenParityTests
-              IntegrationTestingTests/SessionUsageAccountingTests
-              IntegrationTestingTests/StaleWeightIndexIntegrationTests
+              IntegrationTestingTests/SamplingModeBehaviorTests
               IntegrationTestingTests/StopTokenRegressionIntegrationTests
               IntegrationTestingTests/StreamingDeltaTests
-              IntegrationTestingTests/StructuredToolOutputSessionTests
               IntegrationTestingTests/TokenizerVocabExtractorTests
               IntegrationTestingTests/ToolCallGrammarCharacterizationTests
               IntegrationTestingTests/ToolCallIntegrationTests
@@ -226,6 +217,7 @@ jobs:
               IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
               IntegrationTestingTests/ToolCallingReasoningTests
               IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/XGrammarBridgeTests
               IntegrationTestingTests/testAcceptanceRateFloor64TokenBlock4Temp0()
               IntegrationTestingTests/testMTPMidGenerationKVQuantizationCompletesWithoutCrash()
     steps:
