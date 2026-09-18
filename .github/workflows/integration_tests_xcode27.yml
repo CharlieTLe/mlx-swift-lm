@@ -26,14 +26,20 @@ name: Integration Tests (xcode-27)
 # IntegrationTestingTests/MLXFoundationModelsIntegration/PlatformAvailability/DeviceTier.swift.
 # A green run here does mean "the FoundationModels adapter works end to end".
 #
-# Why this is sharded. The suite's models total ~85 GB against ~36Gi of disk, so
-# a single run cannot hold them: run 35178760598 reached a 28G Hugging Face cache
-# and hit ENOSPC 22 minutes in, and 12 of its 17 issues were ENOSPC or truncated
-# downloads. Each matrix shard is a separate VM with a separate empty cache, so a
-# shard only downloads what its own suites touch. That bounds peak disk per job
-# and runs the shards in parallel.
+# Why this is sharded. Run 35178760598 ran the whole suite in one job and hit
+# ENOSPC 22 minutes in with a 28G Hugging Face cache and models still queued; 12
+# of its 17 issues were ENOSPC or truncated downloads. Each matrix shard is a
+# separate VM with a separate empty cache, so it downloads only what its own
+# suites touch. That bounds peak disk per job and runs the shards in parallel.
 #
-# Measured model sizes, which is what the shard boundaries follow:
+# Repo size is NOT download size, which an earlier revision of this comment got
+# wrong by quoting ~85 GB of Hugging Face repo sizes as the suite's footprint.
+# The tokenizer suites fetch tokenizer and config files only, ~27M measured, not
+# the 19.4G and 12.1G their repos weigh, so the real full-suite total is nearer
+# 53 GB. Still far past ~36Gi, so the conclusion holds, but budget from measured
+# downloads rather than repo sizes.
+#
+# Repo sizes, useful only as upper bounds:
 #   gemma-4-31b-it-8bit 33.8  Muse-Glimmer-30B-4bit 19.4  gpt-oss-20b-Q8 12.1
 #   gemma-4-e4b 5.2  gemma-4-e2b 3.6  Qwen3-VL-4B 3.1  Qwen3-4B 2.3
 #   Qwen2.5-3B 1.7  Qwen3-1.7B 1.0  R1-Distill-1.5B 1.0  Llama-3.2-1B 0.7
@@ -41,14 +47,28 @@ name: Integration Tests (xcode-27)
 #
 # The four suites that load gemma-4-31b-it-8bit are deliberately in NO shard:
 # 33.8 GB against ~36Gi leaves no room for the build, and
-# MTPIteratorEndToEndDiagnosticTests also pulls e4b and e2b for ~42.6 GB total.
-# They cannot run on this image at any shard granularity. They keep their
-# coverage on the self-hosted mac via integration_tests.yml, which has a warm
-# cache and real disk. Skipped by identifier in the `core` shard below.
+# MTPIteratorEndToEndDiagnosticTests also pulls e4b and e2b. They cannot run on
+# this image at any shard granularity. They keep their coverage on the
+# self-hosted mac via integration_tests.yml, which has a warm cache and real
+# disk. Skipped by identifier in the `core` shard below.
 #
-# Measured results so far: PlatformCompatibilityProbes 6/6 and
-# PlainChatGenerationTests 1/1, each about 4 minutes end to end including a cold
-# build and the MetalToolchain download.
+# The FM tree is split further (guided / toolcalling / fm-sessions) because disk
+# is not the only limit. A single 218-test shard ran 105 minutes and then died
+# with "The hosted runner lost communication with the server" (run 35293302777),
+# as did the unsharded run before it. Shorter shards on fresh VMs are the
+# hypothesis; the "Start resource sampler" step below exists to replace that
+# hypothesis with evidence, because the log GitHub returns after such a death is
+# truncated to whatever was flushed and shows nothing.
+#
+# Shard sizes by test count: guided 82, fm-sessions 58, core 48, toolcalling 30,
+# and 2 each for tokenizers, vision and gemma4-eseries. Verified against
+# `xcodebuild -enumerate-tests`: 224 of 241 tests are assigned, none twice, and
+# the 17 unassigned are exactly the MTP exclusions above.
+#
+# Measured results so far: tokenizers, vision and gemma4-eseries green in 4 to
+# 5.5 minutes each. gemma4-eseries is a no-op on a fresh VM: both its tests are
+# `.enabled(if: hfSnapshotDir(...) != nil)` and so DISABLED without a warm cache,
+# which is why it "passes" in 0.002 seconds.
 on:
   # `workflow_dispatch` on its own is not enough while iterating: GitHub only
   # offers a dispatchable workflow if the file exists on the default branch.
@@ -99,10 +119,9 @@ jobs:
         shard:
           # Catch-all, and deliberately skip-based rather than only-based: a
           # newly added suite lands here automatically instead of silently
-          # running in no shard at all. Holds the whole
-          # MLXFoundationModelsIntegration tree.
+          # running in no shard at all. Holds the root-level suites.
           - name: core
-            needs_gb: 20
+            needs_gb: 16
             skip: >-
               IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
               IntegrationTestingTests/HarmonyTokenizerIntegrationTests
@@ -113,24 +132,125 @@ jobs:
               IntegrationTestingTests/Rung4TokenParityTests
               IntegrationTestingTests/testAcceptanceRateFloor64TokenBlock4Temp0()
               IntegrationTestingTests/testMTPMidGenerationKVQuantizationCompletesWithoutCrash()
-          # Muse-Glimmer-30B-4bit, 19.4 GB on its own.
-          - name: museglimmer
-            needs_gb: 24
-            only: IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
-          # gpt-oss-20b-MXFP4-Q8, 12.1 GB.
-          - name: harmony
-            needs_gb: 17
-            only: IntegrationTestingTests/HarmonyTokenizerIntegrationTests
-          # gemma-4-e2b-it-4bit + gemma-4-e4b-it-4bit, 8.8 GB together.
-          - name: gemma4-eseries
+              IntegrationTestingTests/GenerableRoundTripTests
+              IntegrationTestingTests/GuidedGenerationTests
+              IntegrationTestingTests/GuidedGenerationIntegrationTests
+              IntegrationTestingTests/MultiModelGuidedGenerationTests
+              IntegrationTestingTests/HardReserveStressTests
+              IntegrationTestingTests/GuidedGenerationBenchmarkTests
+              IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/MaxTokenTruncationTests
+              IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/RequiredPropertyStressTests
+              IntegrationTestingTests/StopTokenRegressionIntegrationTests
+              IntegrationTestingTests/TokenizerVocabExtractorTests
+              IntegrationTestingTests/XGrammarBridgeTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
+              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
+              IntegrationTestingTests/RollbackDeterminismTests
+              IntegrationTestingTests/FoundationModelsToolCallingTests
+              IntegrationTestingTests/ToolCallingReasoningTests
+              IntegrationTestingTests/MultiTurnToolCallingTests
+              IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
+              IntegrationTestingTests/StructuredToolOutputSessionTests
+              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
+              IntegrationTestingTests/ToolCallRoundTripTests
+              IntegrationTestingTests/IntegrationTests
+              IntegrationTestingTests/SessionUsageAccountingTests
+              IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/PlainChatGenerationTests
+              IntegrationTestingTests/SamplingModeBehaviorTests
+              IntegrationTestingTests/ReasoningIntegrationTests
+              IntegrationTestingTests/ReasoningCapabilityGateTests
+              IntegrationTestingTests/ReasoningFamilyVerificationTests
+              IntegrationTestingTests/ConfigurationResolverRoutingTests
+              IntegrationTestingTests/PlatformCompatibilityProbes
+              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
+              IntegrationTestingTests/ColdHubClientFetchTests
+              IntegrationTestingTests/GoldenReplayTests
+              IntegrationTestingTests/GoldenFixtureManifestTests
+              IntegrationTestingTests/MalformedSchemaErrorParityTests
+          # MLXFoundationModelsIntegration/GuidedGeneration and its Grammar
+          # subdirectory. The largest group, and all on gemma-3-270m (0.2G) plus
+          # Llama-3.2-1B and Qwen2.5-3B for the multi-model suite.
+          - name: guided
+            needs_gb: 12
+            only: >-
+              IntegrationTestingTests/GenerableRoundTripTests
+              IntegrationTestingTests/GuidedGenerationTests
+              IntegrationTestingTests/GuidedGenerationIntegrationTests
+              IntegrationTestingTests/MultiModelGuidedGenerationTests
+              IntegrationTestingTests/HardReserveStressTests
+              IntegrationTestingTests/GuidedGenerationBenchmarkTests
+              IntegrationTestingTests/GuidedGenerationUsageTests
+              IntegrationTestingTests/MaxTokenTruncationTests
+              IntegrationTestingTests/PrewarmGrammarTests
+              IntegrationTestingTests/RequiredPropertyStressTests
+              IntegrationTestingTests/StopTokenRegressionIntegrationTests
+              IntegrationTestingTests/TokenizerVocabExtractorTests
+              IntegrationTestingTests/XGrammarBridgeTests
+              IntegrationTestingTests/EmitStopSignalTests
+              IntegrationTestingTests/FastForwardTokenizationDisagreementTests
+              IntegrationTestingTests/ForkIndependenceTests
+              IntegrationTestingTests/LoopInvariantsOnXGrammarTests
+              IntegrationTestingTests/RollbackDeterminismTests
+          # MLXFoundationModelsIntegration/ToolCalling. Qwen3-1.7B and
+          # R1-Distill-1.5B, plus Qwen2.5-3B as the default model.
+          - name: toolcalling
+            needs_gb: 12
+            only: >-
+              IntegrationTestingTests/FoundationModelsToolCallingTests
+              IntegrationTestingTests/ToolCallingReasoningTests
+              IntegrationTestingTests/MultiTurnToolCallingTests
+              IntegrationTestingTests/ToolCallingReasoningCharacterizationTests
+              IntegrationTestingTests/StructuredToolOutputSessionTests
+              IntegrationTestingTests/ToolCallGrammarCharacterizationTests
+              IntegrationTestingTests/ToolCallRoundTripTests
+          # MLXFoundationModelsIntegration TextGeneration, Reasoning,
+          # PlatformAvailability and GoldenReplay.
+          - name: fm-sessions
             needs_gb: 14
-            only: IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
-          # Qwen3-VL-4B-Instruct-4bit, 3.1 GB, shared by both suites.
+            only: >-
+              IntegrationTestingTests/IntegrationTests
+              IntegrationTestingTests/SessionUsageAccountingTests
+              IntegrationTestingTests/UpdateUsageEmissionTests
+              IntegrationTestingTests/ApplyChatTemplateProbeTests
+              IntegrationTestingTests/StreamingDeltaTests
+              IntegrationTestingTests/PlainChatGenerationTests
+              IntegrationTestingTests/SamplingModeBehaviorTests
+              IntegrationTestingTests/ReasoningIntegrationTests
+              IntegrationTestingTests/ReasoningCapabilityGateTests
+              IntegrationTestingTests/ReasoningFamilyVerificationTests
+              IntegrationTestingTests/ConfigurationResolverRoutingTests
+              IntegrationTestingTests/PlatformCompatibilityProbes
+              IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
+              IntegrationTestingTests/ColdHubClientFetchTests
+              IntegrationTestingTests/GoldenReplayTests
+              IntegrationTestingTests/GoldenFixtureManifestTests
+              IntegrationTestingTests/MalformedSchemaErrorParityTests
+          # Tokenizer-only: these pull tokenizer and config files, ~27M, NOT the
+          # 19.4G and 12.1G weight sets their repo sizes suggest.
+          - name: tokenizers
+            needs_gb: 8
+            only: >-
+              IntegrationTestingTests/MuseGlimmerTokenizerIntegrationTests
+              IntegrationTestingTests/HarmonyTokenizerIntegrationTests
+          # Qwen3-VL-4B-Instruct-4bit, 2.9G measured.
           - name: vision
             needs_gb: 9
             only: >-
               IntegrationTestingTests/VisionIntegrationTests
               IntegrationTestingTests/StaleWeightIndexIntegrationTests
+          # Cache-gated by design: `.enabled(if: hfSnapshotDir(...) != nil)`, so
+          # both tests are DISABLED on a fresh VM and this shard is a no-op here.
+          # Kept so the identifiers stay covered if that gate ever changes.
+          - name: gemma4-eseries
+            needs_gb: 8
+            only: IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
     steps:
       - uses: actions/checkout@v6
         with:
@@ -244,6 +364,30 @@ jobs:
             echo "MetalToolchain installed."
           fi
 
+      - name: Start resource sampler
+        if: inputs.only_testing == '' || matrix.shard.name == 'core'
+        shell: bash
+        run: |
+          # Two runs have died with "The hosted runner lost communication with
+          # the server", and the log GitHub returns is truncated to whatever was
+          # flushed before the agent went away, so it holds no evidence. Sample
+          # to a file and upload it even on failure. Memory is the first
+          # suspicion: these tests load real models, and the suite already ships
+          # releaseAllGPUMemory() helpers for cross-suite pressure.
+          cat > /tmp/sampler.sh <<'SAMPLER'
+          while :; do
+            printf '%s ' "$(date -u +%H:%M:%S)"
+            df -g / | awk 'NR==2 { printf "disk_avail_gb=%s ", $4 }'
+            top -l1 -n0 2>/dev/null | awk '/PhysMem/ { printf "%s ", $0 }'
+            sysctl -n vm.swapusage 2>/dev/null | tr -d '\n'
+            printf '\n'
+            sleep 20
+          done
+          SAMPLER
+          chmod +x /tmp/sampler.sh
+          nohup /tmp/sampler.sh > resource-samples.txt 2>&1 &
+          echo "sampler started, pid $!"
+
       - name: Run IntegrationTesting tests (Xcode, macOS)
         # A dispatch that sets only_testing runs that selection once, in `core`,
         # rather than repeating it in all five shards. `matrix` is not available
@@ -310,3 +454,12 @@ jobs:
             IntegrationTesting.xcresult
             ~/Library/Logs/DiagnosticReports/*
           retention-days: 7
+
+      - name: Upload resource samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resource-samples-${{ matrix.shard.name }}
+          path: resource-samples.txt
+          retention-days: 7
+          if-no-files-found: ignore
