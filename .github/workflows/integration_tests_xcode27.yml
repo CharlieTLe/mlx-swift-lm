@@ -6,19 +6,29 @@ name: Integration Tests (xcode-27)
 # pins Xcode 26, where every `canImport(FoundationModels, _version: 2)` block
 # compiles out and the MLXFoundationModels suites simply do not exist.
 #
-# What the hosted `xcode-27` image actually is (actions/runner-images, image
-# version 20260810.0090.1, label documented as a public preview):
-#   - arm64, Xcode 27.0 beta (27A5228h) as the *default* toolchain
+# What the hosted `xcode-27` image actually is, measured on 2026-09-17 rather
+# than read off actions/runner-images metadata (image xcode-27-arm64/20260907.0173,
+# label documented as a public preview):
+#   - arm64, Xcode 27.0 beta 6 (27A5252f) as the *default* toolchain. The image
+#     lags: runner-images pins 27.0+27A266a in its toolset, and 27A266a is the
+#     released build, but the deployed image is weeks behind it.
 #   - macOS 27.0 SDK installed
-#   - host OS is macOS 26.5.2, NOT macOS 27
+#   - host OS is macOS 27.0 (26A5406e), so this is a macOS 27 host, not 26
+#   - MetalToolchain is NOT preinstalled; -downloadComponent fetches it in ~17s
+#   - ~37Gi free on /, one 3.3G Xcode, no simulator runtimes, so nothing
+#     meaningful to reclaim. That is not enough for the full suite: the Hugging
+#     Face cache alone reached 28G before ENOSPC. Narrow every run with
+#     only_testing (see the "Report free space" step).
 #
-# That combination exercises a tier the nightly never builds: the FM suites
-# COMPILE (the 27 SDK makes `canImport(..., _version: 2)` true) and then execute
-# at `DeviceTier.partial`, because the FM public surface is
-# `@available(macOS 27, *)` and this host is 26. See
+# So the FM suites both compile here (the 27 SDK makes
+# `canImport(..., _version: 2)` true) and execute at `DeviceTier.full`, because
+# the host satisfies the `@available(macOS 27, *)` FM surface. See
 # IntegrationTestingTests/MLXFoundationModelsIntegration/PlatformAvailability/DeviceTier.swift.
-# So read a green run as "compiles against the 27 SDK and degrades correctly on
-# an OS 26 host", NOT as "the FoundationModels adapter works end to end".
+# A green run here does mean "the FoundationModels adapter works end to end".
+#
+# Measured results so far: PlatformCompatibilityProbes 6/6 and
+# PlainChatGenerationTests 1/1, each about 4 minutes end to end including a cold
+# build and the MetalToolchain download.
 on:
   # `workflow_dispatch` on its own is not enough while iterating: GitHub only
   # offers a dispatchable workflow if the file exists on the default branch.
@@ -105,6 +115,38 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Report free space
+        shell: bash
+        run: |
+          # Read-only on purpose. An earlier revision of this step tried to
+          # reclaim space and did real damage: on this image
+          # /Applications/Xcode.app, Xcode_27.0.app and Xcode_27.0.0.app are all
+          # 0-byte SYMLINKS to the one real 3.3G Xcode_27_beta_6.app, and
+          # /Library/Developer/CoreSimulator/Profiles/Runtimes does not exist at
+          # all. So `rm -rf` on the non-selected Xcodes freed 0 bytes and deleted
+          # the canonical /Applications/Xcode.app symlink that other tooling
+          # resolves through. Run 35250965894 then died 69 minutes in with "The
+          # hosted runner lost communication with the server".
+          #
+          # There is nothing meaningful to reclaim here: ~37Gi free, one 3.3G
+          # Xcode, no simulator runtimes. Report and move on.
+          df -h /
+          du -sh /Applications/Xcode*.app 2>/dev/null || true
+
+          # The full suite does not fit in 37Gi. Run 35178760598 reached a 28G
+          # Hugging Face cache and hit ENOSPC 22 minutes in with models still
+          # queued, so 12 of its 17 issues were ENOSPC or truncated downloads.
+          # Fail here rather than spend an hour rediscovering that, unless the
+          # dispatch narrowed the run with only_testing.
+          available_gb="$(df -g / | awk 'NR==2 { print $4 }')"
+          echo "Available: ${available_gb}Gi"
+          if [ -z "$ONLY_TESTING" ] && [ "$available_gb" -lt 60 ]; then
+            echo "::error::A full-suite run needs more than ${available_gb}Gi. The Hugging Face cache alone reached 28G before ENOSPC in run 35178760598. Narrow the run with the only_testing input, or use a runner with more disk."
+            exit 1
+          fi
+        env:
+          ONLY_TESTING: ${{ inputs.only_testing }}
 
       - name: Verify MetalToolchain installed
         shell: bash
