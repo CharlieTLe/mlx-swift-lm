@@ -28,14 +28,20 @@ name: Integration Tests (xcode-27)
 #
 # Why this is sharded, and why into exactly five. The hosted macOS runner limit
 # is 5 concurrent jobs, measured in runs 35302803992 and 35374058521: five start
-# at once and the sixth waits for a free slot. So wall clock is roughly total
+# at once and the sixth waits for a free slot. That limit is per ACCOUNT, not
+# per workflow or per run, so splitting this into several workflow files buys
+# nothing: two simultaneous runs on different refs gave 5 running and 5 queued,
+# never 10 (runs 35398834411 and 35398843501). More workflows would only add
+# per-job overhead and queue against each other. So wall clock is roughly total
 # machine time divided by five, and each shard pays a fixed ~4.5 minutes of
 # checkout, 839 MB MetalToolchain download and cold build. More shards means
 # more of that overhead and a SLOWER run, not a faster one. Eight shards cost 81
 # minutes of machine time, 36 of it overhead, for a 25m47s wall clock.
 #
-# Shards are therefore balanced by MEASURED suite time, not by directory, which
-# is why their contents look arbitrary. Suite times are wildly non-uniform:
+# Shards are therefore balanced by MEASURED suite time, not by theme, so each
+# one is a grab bag and its name only reflects whichever suites dominate its
+# runtime. Thematic grouping was tried and produced a 757s shard beside a 280s
+# one, for a 21m24s wall clock. Suite times are wildly non-uniform:
 # MultiModelGuidedGeneration 309s, ToolCallIntegration dialects 255s,
 # GuidedGeneration 220s, CoherenceIntegration 210s, Reranker 155s,
 # GenerableRoundTrip 144s, against a long tail of sub-10s suites. Grouping by
@@ -121,7 +127,9 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          - name: shard1
+          # Dominated by MultiModelGuidedGeneration (~362s) plus the FM tool-call
+          # suite and ReasoningIntegration.
+          - name: guided-multimodel
             needs_gb: 24
             only: >-
               IntegrationTestingTests/MultiModelGuidedGenerationTests
@@ -134,7 +142,9 @@ jobs:
               IntegrationTestingTests/StopTokenRegressionIntegrationTests
               IntegrationTestingTests/Gemma4EseriesLoadIntegrationTests
               IntegrationTestingTests/MalformedSchemaErrorParityTests
-          - name: shard2
+          # Dominated by the eleven ToolCallIntegration dialect tests (~268s,
+          # GLM-4 + Ministral + Qwen3.5 + LFM2 = 11.3G) plus the Qwen3-VL suites.
+          - name: dialects-vision
             needs_gb: 24
             only: >-
               IntegrationTestingTests/ToolCallIntegrationTests/glm4FormatAutoDetection()
@@ -158,7 +168,8 @@ jobs:
               IntegrationTestingTests/ForkIndependenceTests
               IntegrationTestingTests/CoherenceFullIntegrationTests
               IntegrationTestingTests/GoldenFixtureManifestTests
-          - name: shard3
+          # Dominated by GuidedGenerationTests (~224s) and MultiTurnToolCalling.
+          - name: guided-multiturn
             needs_gb: 24
             only: >-
               IntegrationTestingTests/GuidedGenerationTests
@@ -172,7 +183,9 @@ jobs:
               IntegrationTestingTests/RollbackDeterminismTests
               IntegrationTestingTests/StructuredToolOutputSessionTests
               IntegrationTestingTests/ReasoningFamilyVerificationTests
-          - name: shard4
+          # Dominated by CoherenceIntegration (~169s) and the guided-generation
+          # benchmark suite (~121s).
+          - name: coherence-bench
             needs_gb: 24
             only: >-
               IntegrationTestingTests/CoherenceIntegrationTests
@@ -185,7 +198,7 @@ jobs:
               IntegrationTestingTests/SessionUsageAccountingTests
               IntegrationTestingTests/PlatformCompatibilityProbes
               IntegrationTestingTests/HuggingFaceLanguageModelMacroSmoke
-          - name: shard5
+          - name: catchall
             needs_gb: 24
             # Catch-all. Skips every suite the other four select, so a newly
             # added suite runs here rather than silently in no shard. Skipping
